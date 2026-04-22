@@ -11,7 +11,6 @@ export const crearAnalisis = async (req, res) => {
       return res.status(400).json({ error: "El campo 'texto' es obligatorio." });
     }
 
-    // 1. Llamada a Groq (IA)
     const chatCompletion = await groq.chat.completions.create({
       messages: [
         {
@@ -35,7 +34,6 @@ export const crearAnalisis = async (req, res) => {
 
     const analisisIA = JSON.parse(chatCompletion.choices[0]?.message?.content);
 
-    // 2. Guardado en Supabase
     const { data, error: dbError } = await supabase
       .from("analisis") 
       .insert([
@@ -63,19 +61,22 @@ export const crearAnalisis = async (req, res) => {
   }
 };
 
-// @desc    Obtener todos los registros de la DB
-// @route   GET /api/analisis
+// @desc    Obtener historial con opción de filtrar por categoría
+// @route   GET /api/analisis?categoria=Queja
 export const obtenerHistorial = async (req, res) => {
   try {
-    const { data, error } = await supabase
-      .from("analisis")
-      .select("*")
-      .order("created_at", { ascending: false }); // Orden descendente (más recientes arriba)
+    const { categoria } = req.query; // Captura el filtro de la URL
+    
+    let query = supabase.from("analisis").select("*");
 
-    if (error) {
-      console.error("ERROR AL RECUPERAR HISTORIAL:", error);
-      return res.status(500).json({ error: "No se pudo obtener el historial", detalles: error.message });
+    // Si mandas el filtro, buscamos la palabra en el campo 'resultado'
+    if (categoria) {
+      query = query.ilike("resultado", `%${categoria}%`);
     }
+
+    const { data, error } = await query.order("created_at", { ascending: false });
+
+    if (error) throw error;
 
     return res.status(200).json({
       mensaje: "Historial recuperado con éxito",
@@ -84,5 +85,32 @@ export const obtenerHistorial = async (req, res) => {
     });
   } catch (error) {
     return res.status(500).json({ error: "Error de servidor", detalles: error.message });
+  }
+};
+
+// @desc    Eliminar un registro por su ID
+// @route   DELETE /api/analisis/:id
+export const eliminarAnalisis = async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    const { data, error } = await supabase
+      .from("analisis")
+      .delete()
+      .eq("id", id)
+      .select();
+
+    if (error) throw error;
+
+    if (data.length === 0) {
+      return res.status(404).json({ error: "No se encontró ningún registro con ese ID" });
+    }
+
+    return res.status(200).json({
+      mensaje: "Registro eliminado con éxito",
+      eliminado: data[0]
+    });
+  } catch (error) {
+    return res.status(500).json({ error: "Error al eliminar registro", detalles: error.message });
   }
 };

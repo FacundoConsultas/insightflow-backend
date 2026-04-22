@@ -1,12 +1,15 @@
 import express from 'express';
-import { crearAnalisis, obtenerHistorial } from '../controllers/analisisController.js';
+import { crearAnalisis, obtenerHistorial, eliminarAnalisis } from '../controllers/analisisController.js';
 
 const router = express.Router();
 
-// POST: Crea un nuevo análisis procesado por IA y lo guarda
+// POST: Crea un nuevo análisis inteligente
 router.post('/', crearAnalisis);
 
-// GET: Recupera todos los análisis guardados en Supabase
+// GET: Recupera el historial (puedes filtrar con ?categoria=Queja)
 router.get('/', obtenerHistorial);
+
+// DELETE: Borra un registro específico por su ID
+router.delete('/:id', eliminarAnalisis);
 
 export default router;
