@@ -1,16 +1,17 @@
 import groq from "../config/groq.js";
 import { supabase } from "../config/supabase.js";
 
+// @desc    Crear análisis con IA y guardar en DB
+// @route   POST /api/analisis
 export const crearAnalisis = async (req, res) => {
   try {
     const { texto } = req.body;
 
-    // 1. Validación de entrada
     if (!texto) {
       return res.status(400).json({ error: "El campo 'texto' es obligatorio." });
     }
 
-    // 2. Llamada a Groq con instrucciones específicas de respuesta automática
+    // 1. Llamada a Groq (IA)
     const chatCompletion = await groq.chat.completions.create({
       messages: [
         {
@@ -26,21 +27,15 @@ export const crearAnalisis = async (req, res) => {
             "respuesta_automatica": "Una respuesta profesional y empática para el cliente"
           }`
         },
-        {
-          role: "user",
-          content: texto
-        },
+        { role: "user", content: texto },
       ],
       model: "llama-3.1-8b-instant",
-      // Esto asegura que la IA devuelva un JSON válido
       response_format: { type: "json_object" } 
     });
 
-    // Parseamos la respuesta de la IA (convertimos el texto JSON en un objeto JS)
     const analisisIA = JSON.parse(chatCompletion.choices[0]?.message?.content);
 
-    // 3. Guardado en Supabase
-    // Guardamos la respuesta automática en la columna 'resultado' que ya tienes creada
+    // 2. Guardado en Supabase
     const { data, error: dbError } = await supabase
       .from("analisis") 
       .insert([
@@ -53,30 +48,41 @@ export const crearAnalisis = async (req, res) => {
 
     if (dbError) {
       console.error("ERROR DE BASE DE DATOS:", dbError);
-      return res.status(500).json({ 
-        error: "Fallo al guardar en Supabase", 
-        detalles: dbError.message 
-      });
+      return res.status(500).json({ error: "Fallo al guardar en Supabase", detalles: dbError.message });
     }
 
-    // 4. Respuesta final al cliente (Frontend / Thunder Client)
     return res.status(200).json({
       mensaje: "Análisis inteligente completado",
-      clasificacion: {
-        categoria: analisisIA.categoria,
-        sentimiento: analisisIA.sentimiento,
-        prioridad: analisisIA.prioridad,
-        resumen: analisisIA.analisis_resumen
-      },
-      respuesta_para_cliente: analisisIA.respuesta_automatica,
+      clasificacion: analisisIA,
       registro_db: data[0]
     });
 
   } catch (error) {
     console.error("ERROR CRÍTICO:", error.message);
-    return res.status(500).json({ 
-      error: "Error interno", 
-      detalles: error.message 
+    return res.status(500).json({ error: "Error interno", detalles: error.message });
+  }
+};
+
+// @desc    Obtener todos los registros de la DB
+// @route   GET /api/analisis
+export const obtenerHistorial = async (req, res) => {
+  try {
+    const { data, error } = await supabase
+      .from("analisis")
+      .select("*")
+      .order("created_at", { ascending: false }); // Orden descendente (más recientes arriba)
+
+    if (error) {
+      console.error("ERROR AL RECUPERAR HISTORIAL:", error);
+      return res.status(500).json({ error: "No se pudo obtener el historial", detalles: error.message });
+    }
+
+    return res.status(200).json({
+      mensaje: "Historial recuperado con éxito",
+      cantidad: data.length,
+      registros: data
     });
+  } catch (error) {
+    return res.status(500).json({ error: "Error de servidor", detalles: error.message });
   }
 };

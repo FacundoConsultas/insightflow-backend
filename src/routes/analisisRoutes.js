@@ -1,13 +1,12 @@
 import express from 'express';
-import { crearAnalisis } from '../controllers/analisisController.js'; // Importación nombrada y con .js
+import { crearAnalisis, obtenerHistorial } from '../controllers/analisisController.js';
 
 const router = express.Router();
 
-// Ruta para crear un nuevo análisis
+// POST: Crea un nuevo análisis procesado por IA y lo guarda
 router.post('/', crearAnalisis);
 
-// Si todavía no creaste la función de historial, podés dejarla comentada 
-// o crearla después en el controlador. Por ahora la comentamos para que no falle:
-// router.get('/historial', obtenerHistorial);
+// GET: Recupera todos los análisis guardados en Supabase
+router.get('/', obtenerHistorial);
 
 export default router;
