@@ -1,15 +1,23 @@
 import express from 'express';
-import { crearAnalisis, obtenerHistorial, eliminarAnalisis } from '../controllers/analisisController.js';
+import { 
+  crearAnalisis, 
+  obtenerHistorial, 
+  eliminarAnalisis, 
+  obtenerEstadisticas 
+} from '../controllers/analisisController.js';
 
 const router = express.Router();
 
-// POST: Crea un nuevo análisis inteligente
+// POST: Analiza y guarda en la DB
 router.post('/', crearAnalisis);
 
-// GET: Recupera el historial (puedes filtrar con ?categoria=Queja)
+// GET: Lista de historial con filtros (?categoria=...)
 router.get('/', obtenerHistorial);
 
-// DELETE: Borra un registro específico por su ID
+// GET: Resumen estadístico para el Dashboard (Debe ir antes de /:id)
+router.get('/stats', obtenerEstadisticas);
+
+// DELETE: Borra un registro por su ID
 router.delete('/:id', eliminarAnalisis);
 
 export default router;

@@ -2,7 +2,6 @@ import groq from "../config/groq.js";
 import { supabase } from "../config/supabase.js";
 
 // @desc    Crear análisis con IA y guardar en columnas específicas
-// @route   POST /api/analisis
 export const crearAnalisis = async (req, res) => {
   try {
     const { texto } = req.body;
@@ -11,7 +10,6 @@ export const crearAnalisis = async (req, res) => {
       return res.status(400).json({ error: "El campo 'texto' es obligatorio." });
     }
 
-    // 1. Llamada a Groq (IA) con formato JSON estricto
     const chatCompletion = await groq.chat.completions.create({
       messages: [
         {
@@ -34,7 +32,6 @@ export const crearAnalisis = async (req, res) => {
 
     const analisisIA = JSON.parse(chatCompletion.choices[0]?.message?.content);
 
-    // 2. Guardado en Supabase (Mapeando a las nuevas columnas)
     const { data, error: dbError } = await supabase
       .from("analisis") 
       .insert([
@@ -49,32 +46,24 @@ export const crearAnalisis = async (req, res) => {
       ])
       .select();
 
-    if (dbError) {
-      console.error("ERROR DE BASE DE DATOS:", dbError);
-      return res.status(500).json({ error: "Fallo al guardar en Supabase", detalles: dbError.message });
-    }
+    if (dbError) throw dbError;
 
     return res.status(200).json({
       mensaje: "Análisis inteligente completado y guardado",
       clasificacion: analisisIA,
       registro_db: data[0]
     });
-
   } catch (error) {
-    console.error("ERROR CRÍTICO:", error.message);
     return res.status(500).json({ error: "Error interno", detalles: error.message });
   }
 };
 
 // @desc    Obtener historial con filtros inteligentes
-// @route   GET /api/analisis?prioridad=Alta
 export const obtenerHistorial = async (req, res) => {
   try {
     const { categoria, prioridad, sentimiento } = req.query;
-    
     let query = supabase.from("analisis").select("*");
 
-    // Filtros exactos gracias a las nuevas columnas
     if (categoria) query = query.eq("categoria", categoria);
     if (prioridad) query = query.eq("prioridad", prioridad);
     if (sentimiento) query = query.eq("sentimiento", sentimiento);
@@ -93,8 +82,36 @@ export const obtenerHistorial = async (req, res) => {
   }
 };
 
+// @desc    Obtener estadísticas resumidas
+export const obtenerEstadisticas = async (req, res) => {
+  try {
+    const { data, error } = await supabase.from("analisis").select("categoria, sentimiento, prioridad");
+
+    if (error) throw error;
+
+    const stats = {
+      total: data.length,
+      categorias: { Queja: 0, Elogio: 0, Consulta: 0, Sugerencia: 0 },
+      sentimientos: { Positivo: 0, Neutro: 0, Negativo: 0 },
+      prioridades: { Alta: 0, Media: 0, Baja: 0 }
+    };
+
+    data.forEach(item => {
+      if (stats.categorias[item.categoria] !== undefined) stats.categorias[item.categoria]++;
+      if (stats.sentimientos[item.sentimiento] !== undefined) stats.sentimientos[item.sentimiento]++;
+      if (stats.prioridades[item.prioridad] !== undefined) stats.prioridades[item.prioridad]++;
+    });
+
+    return res.status(200).json({
+      mensaje: "Estadísticas generadas con éxito",
+      stats
+    });
+  } catch (error) {
+    return res.status(500).json({ error: "Error al generar estadísticas", detalles: error.message });
+  }
+};
+
 // @desc    Eliminar un registro por ID
-// @route   DELETE /api/analisis/:id
 export const eliminarAnalisis = async (req, res) => {
   try {
     const { id } = req.params;
