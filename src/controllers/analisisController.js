@@ -5,66 +5,46 @@ export const crearAnalisis = async (req, res) => {
   try {
     const { texto } = req.body;
 
-    // 1. Validación de entrada
     if (!texto) {
       return res.status(400).json({ error: "El campo 'texto' es obligatorio." });
     }
 
-    console.log("Iniciando análisis para el texto:", texto.substring(0, 50) + "...");
-
-    // 2. Llamada a Groq (IA)
+    // 1. Llamada a Groq
     const chatCompletion = await groq.chat.completions.create({
       messages: [
-        {
-          role: "system",
-          content: "Eres un experto analista. Analiza el siguiente texto de forma breve y profesional."
-        },
-        {
-          role: "user",
-          content: texto
-        },
+        { role: "system", content: "Eres un experto analista profesional." },
+        { role: "user", content: texto },
       ],
-     model: "llama-3.1-8b-instant", // El reemplazo oficial
+      model: "llama-3.1-8b-instant",
     });
-
-    // 3. Log de depuración (Vital para ver en Render)
-    console.log("Respuesta completa de Groq recibida.");
-
-    // 4. Validación de la respuesta de la IA (Evita el error del '0')
-    if (!chatCompletion.choices || chatCompletion.choices.length === 0) {
-      console.error("Groq devolvió un objeto sin opciones (choices)");
-      return res.status(500).json({ error: "La IA no devolvió una respuesta válida." });
-    }
 
     const resultadoIA = chatCompletion.choices[0]?.message?.content;
 
-    if (!resultadoIA) {
-      return res.status(500).json({ error: "El contenido de la respuesta de la IA está vacío." });
-    }
-
-    // 5. Guardar en Supabase (Opcional, según tu lógica)
+    // 2. Intento de Guardado en Supabase
     const { data, error: dbError } = await supabase
-      .from("analisis") // Asegúrate que tu tabla se llame así
+      .from("analisis") 
       .insert([{ texto_original: texto, resultado: resultadoIA }])
       .select();
 
+    // MODIFICACIÓN AQUÍ: Si falla la DB, devolvemos el error real
     if (dbError) {
-      console.error("Error al guardar en Supabase:", dbError);
-      // No cortamos el flujo aquí para que al menos devuelva el análisis de la IA
+      console.error("ERROR DE BASE DE DATOS:", dbError);
+      return res.status(500).json({ 
+        error: "Fallo al guardar en Supabase", 
+        detalles: dbError.message,
+        codigo_error: dbError.code 
+      });
     }
 
-    // 6. Respuesta final exitosa
+    // 3. Si todo salió bien
     return res.status(200).json({
-      mensaje: "Análisis realizado con éxito",
+      mensaje: "Análisis realizado y guardado con éxito",
       analisis: resultadoIA,
-      datos_guardados: data ? data[0] : "No se guardó en DB"
+      registro: data[0]
     });
 
   } catch (error) {
-    console.error("ERROR CRÍTICO EN EL CONTROLADOR:", error.message);
-    return res.status(500).json({
-      error: "Error interno del servidor",
-      detalles: error.message
-    });
+    console.error("ERROR CRÍTICO:", error.message);
+    return res.status(500).json({ error: "Error interno", detalles: error.message });
   }
 };
