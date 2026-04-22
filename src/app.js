@@ -1,7 +1,8 @@
-const express = require('express');
-const cors = require('cors');
+import express from 'express';
+import cors from 'cors';
+import analisisRoutes from './routes/analisisRoutes.js'; // CAMBIO: import y agregado de .js
+
 const app = express();
-const analisisRoutes = require('./routes/analisisRoutes');
 
 app.use(cors());
 app.use(express.json());
@@ -11,4 +12,4 @@ app.get('/', (req, res) => res.send('API Funcionando 🚀'));
 
 app.use('/api/analisis', analisisRoutes);
 
-module.exports = app;
+export default app;

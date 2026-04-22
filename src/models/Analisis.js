@@ -1,4 +1,4 @@
-const supabase = require('../config/supabase');
+import { supabase } from '../config/supabase.js'; // CAMBIO: import y agregado de .js
 
 const Analisis = {
     crear: async (datos) => {
@@ -19,4 +19,4 @@ const Analisis = {
     }
 };
 
-module.exports = Analisis;
+export default Analisis; // CAMBIO: export default en lugar de module.exports

@@ -1,8 +1,13 @@
-const express = require('express');
+import express from 'express';
+import { crearAnalisis } from '../controllers/analisisController.js'; // Importación nombrada y con .js
+
 const router = express.Router();
-const analisisController = require('../controllers/analisisController');
 
-router.post('/', analisisController.analizarTexto);
-router.get('/historial', analisisController.obtenerHistorial);
+// Ruta para crear un nuevo análisis
+router.post('/', crearAnalisis);
 
-module.exports = router;
+// Si todavía no creaste la función de historial, podés dejarla comentada 
+// o crearla después en el controlador. Por ahora la comentamos para que no falle:
+// router.get('/historial', obtenerHistorial);
+
+export default router;
