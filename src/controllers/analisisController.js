@@ -1,7 +1,7 @@
 import groq from "../config/groq.js";
 import { supabase } from "../config/supabase.js";
 
-// @desc    Crear análisis con IA y guardar en DB
+// @desc    Crear análisis con IA y guardar en columnas específicas
 // @route   POST /api/analisis
 export const crearAnalisis = async (req, res) => {
   try {
@@ -11,12 +11,12 @@ export const crearAnalisis = async (req, res) => {
       return res.status(400).json({ error: "El campo 'texto' es obligatorio." });
     }
 
+    // 1. Llamada a Groq (IA) con formato JSON estricto
     const chatCompletion = await groq.chat.completions.create({
       messages: [
         {
           role: "system",
-          content: `Eres un asistente experto en atención al cliente y análisis de sentimientos. 
-          Tu objetivo es calificar el mensaje del usuario y generar una respuesta ayuda.
+          content: `Eres un asistente experto en atención al cliente. 
           DEBES responder ÚNICAMENTE en formato JSON con la siguiente estructura:
           {
             "categoria": "Queja, Elogio, Consulta o Sugerencia",
@@ -34,12 +34,17 @@ export const crearAnalisis = async (req, res) => {
 
     const analisisIA = JSON.parse(chatCompletion.choices[0]?.message?.content);
 
+    // 2. Guardado en Supabase (Mapeando a las nuevas columnas)
     const { data, error: dbError } = await supabase
       .from("analisis") 
       .insert([
         { 
           texto_original: texto, 
-          resultado: analisisIA.respuesta_automatica 
+          resultado: analisisIA.respuesta_automatica,
+          categoria: analisisIA.categoria,
+          sentimiento: analisisIA.sentimiento,
+          prioridad: analisisIA.prioridad,
+          resumen: analisisIA.analisis_resumen
         }
       ])
       .select();
@@ -50,7 +55,7 @@ export const crearAnalisis = async (req, res) => {
     }
 
     return res.status(200).json({
-      mensaje: "Análisis inteligente completado",
+      mensaje: "Análisis inteligente completado y guardado",
       clasificacion: analisisIA,
       registro_db: data[0]
     });
@@ -61,25 +66,25 @@ export const crearAnalisis = async (req, res) => {
   }
 };
 
-// @desc    Obtener historial con opción de filtrar por categoría
-// @route   GET /api/analisis?categoria=Queja
+// @desc    Obtener historial con filtros inteligentes
+// @route   GET /api/analisis?prioridad=Alta
 export const obtenerHistorial = async (req, res) => {
   try {
-    const { categoria } = req.query; // Captura el filtro de la URL
+    const { categoria, prioridad, sentimiento } = req.query;
     
     let query = supabase.from("analisis").select("*");
 
-    // Si mandas el filtro, buscamos la palabra en el campo 'resultado'
-    if (categoria) {
-      query = query.ilike("resultado", `%${categoria}%`);
-    }
+    // Filtros exactos gracias a las nuevas columnas
+    if (categoria) query = query.eq("categoria", categoria);
+    if (prioridad) query = query.eq("prioridad", prioridad);
+    if (sentimiento) query = query.eq("sentimiento", sentimiento);
 
     const { data, error } = await query.order("created_at", { ascending: false });
 
     if (error) throw error;
 
     return res.status(200).json({
-      mensaje: "Historial recuperado con éxito",
+      mensaje: "Historial recuperado",
       cantidad: data.length,
       registros: data
     });
@@ -88,29 +93,18 @@ export const obtenerHistorial = async (req, res) => {
   }
 };
 
-// @desc    Eliminar un registro por su ID
+// @desc    Eliminar un registro por ID
 // @route   DELETE /api/analisis/:id
 export const eliminarAnalisis = async (req, res) => {
   try {
     const { id } = req.params;
-
-    const { data, error } = await supabase
-      .from("analisis")
-      .delete()
-      .eq("id", id)
-      .select();
-
+    const { data, error } = await supabase.from("analisis").delete().eq("id", id).select();
+    
     if (error) throw error;
+    if (data.length === 0) return res.status(404).json({ error: "ID no encontrado" });
 
-    if (data.length === 0) {
-      return res.status(404).json({ error: "No se encontró ningún registro con ese ID" });
-    }
-
-    return res.status(200).json({
-      mensaje: "Registro eliminado con éxito",
-      eliminado: data[0]
-    });
+    return res.status(200).json({ mensaje: "Registro eliminado", eliminado: data[0] });
   } catch (error) {
-    return res.status(500).json({ error: "Error al eliminar registro", detalles: error.message });
+    return res.status(500).json({ error: "Error al eliminar", detalles: error.message });
   }
 };
