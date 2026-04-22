@@ -1,7 +1,8 @@
 import groq from "../config/groq.js";
 import { supabase } from "../config/supabase.js";
 
-// @desc    Crear análisis con IA y guardar en columnas específicas
+// @desc    Crear análisis con Inteligencia de Negocio y guardar en DB
+// @route   POST /api/analisis
 export const crearAnalisis = async (req, res) => {
   try {
     const { texto } = req.body;
@@ -10,19 +11,21 @@ export const crearAnalisis = async (req, res) => {
       return res.status(400).json({ error: "El campo 'texto' es obligatorio." });
     }
 
+    // 1. Llamada a Groq (InsightFlow AI Engine)
     const chatCompletion = await groq.chat.completions.create({
       messages: [
         {
           role: "system",
-          content: `Eres un asistente experto en atención al cliente. 
-          DEBES responder ÚNICAMENTE en formato JSON con la siguiente estructura:
+          content: `Eres InsightFlow AI, un motor avanzado de inteligencia de negocio para atención al cliente.
+          Analiza el mensaje y responde ÚNICAMENTE en formato JSON con esta estructura:
           {
-            "categoria": "Queja, Elogio, Consulta o Sugerencia",
+            "categoria": "Pagos, Envíos, Producto, Soporte Técnico o General",
             "sentimiento": "Positivo, Neutro o Negativo",
-            "prioridad": "Alta, Media o Baja",
-            "analisis_resumen": "Un resumen de 1 oración del problema",
-            "respuesta_automatica": "Una respuesta profesional y empática para el cliente"
-          }`
+            "prioridad": "Crítica, Alta, Media o Baja",
+            "analisis_resumen": "Resumen de 1 oración enfocada en el problema de negocio",
+            "respuesta_automatica": "Respuesta profesional, empática y resolutiva"
+          }
+          REGLA DE ORO: Si el texto menciona 'denuncia', 'abogado', 'estafa', 'fraude' o 'nunca más', la prioridad DEBE ser Crítica.`
         },
         { role: "user", content: texto },
       ],
@@ -32,6 +35,7 @@ export const crearAnalisis = async (req, res) => {
 
     const analisisIA = JSON.parse(chatCompletion.choices[0]?.message?.content);
 
+    // 2. Guardado en Supabase
     const { data, error: dbError } = await supabase
       .from("analisis") 
       .insert([
@@ -49,16 +53,18 @@ export const crearAnalisis = async (req, res) => {
     if (dbError) throw dbError;
 
     return res.status(200).json({
-      mensaje: "Análisis inteligente completado y guardado",
+      mensaje: "Análisis de InsightFlow AI completado",
       clasificacion: analisisIA,
       registro_db: data[0]
     });
+
   } catch (error) {
-    return res.status(500).json({ error: "Error interno", detalles: error.message });
+    console.error("ERROR INSIGHTFLOW:", error.message);
+    return res.status(500).json({ error: "Error interno en el motor AI", detalles: error.message });
   }
 };
 
-// @desc    Obtener historial con filtros inteligentes
+// @desc    Obtener historial con filtros de negocio
 export const obtenerHistorial = async (req, res) => {
   try {
     const { categoria, prioridad, sentimiento } = req.query;
@@ -73,7 +79,7 @@ export const obtenerHistorial = async (req, res) => {
     if (error) throw error;
 
     return res.status(200).json({
-      mensaje: "Historial recuperado",
+      mensaje: "Historial de InsightFlow recuperado",
       cantidad: data.length,
       registros: data
     });
@@ -82,7 +88,7 @@ export const obtenerHistorial = async (req, res) => {
   }
 };
 
-// @desc    Obtener estadísticas resumidas
+// @desc    Obtener estadísticas para Dashboard
 export const obtenerEstadisticas = async (req, res) => {
   try {
     const { data, error } = await supabase.from("analisis").select("categoria, sentimiento, prioridad");
@@ -91,9 +97,9 @@ export const obtenerEstadisticas = async (req, res) => {
 
     const stats = {
       total: data.length,
-      categorias: { Queja: 0, Elogio: 0, Consulta: 0, Sugerencia: 0 },
+      categorias: { Pagos: 0, Envíos: 0, Producto: 0, "Soporte Técnico": 0, General: 0 },
       sentimientos: { Positivo: 0, Neutro: 0, Negativo: 0 },
-      prioridades: { Alta: 0, Media: 0, Baja: 0 }
+      prioridades: { Crítica: 0, Alta: 0, Media: 0, Baja: 0 }
     };
 
     data.forEach(item => {
@@ -103,7 +109,7 @@ export const obtenerEstadisticas = async (req, res) => {
     });
 
     return res.status(200).json({
-      mensaje: "Estadísticas generadas con éxito",
+      mensaje: "KPIs generados con éxito",
       stats
     });
   } catch (error) {
@@ -111,7 +117,7 @@ export const obtenerEstadisticas = async (req, res) => {
   }
 };
 
-// @desc    Eliminar un registro por ID
+// @desc    Eliminar un registro
 export const eliminarAnalisis = async (req, res) => {
   try {
     const { id } = req.params;
@@ -120,7 +126,7 @@ export const eliminarAnalisis = async (req, res) => {
     if (error) throw error;
     if (data.length === 0) return res.status(404).json({ error: "ID no encontrado" });
 
-    return res.status(200).json({ mensaje: "Registro eliminado", eliminado: data[0] });
+    return res.status(200).json({ mensaje: "Registro eliminado de InsightFlow", eliminado: data[0] });
   } catch (error) {
     return res.status(500).json({ error: "Error al eliminar", detalles: error.message });
   }
