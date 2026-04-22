@@ -1,48 +1,70 @@
-const groqConfig = require('../config/groq');
-const Analisis = require('../models/Analisis');
+import groq from "../config/groq.js";
+import { supabase } from "../config/supabase.js";
 
-exports.analizarTexto = async (req, res) => {
-    try {
-        const { contenido, user_id } = req.body;
-        
-        const response = await fetch(groqConfig.apiUrl, {
-            method: 'POST',
-            headers: {
-                'Content-Type': 'application/json',
-                'Authorization': `Bearer ${groqConfig.apiKey}`
-            },
-            body: JSON.stringify({
-                model: groqConfig.model,
-                messages: [
-                    { role: "system", content: "Devuelve un JSON con: sentimiento, prioridad, categoria, resumen, respuesta_cliente." },
-                    { role: "user", content: contenido }
-                ],
-                response_format: { type: "json_object" }
-            })
-        });
+export const crearAnalisis = async (req, res) => {
+  try {
+    const { texto } = req.body;
 
-        const dataIA = await response.json();
-        const resultadoIA = JSON.parse(dataIA.choices[0].message.content);
-
-        await Analisis.crear({
-            contenido,
-            resultado_ia: resultadoIA,
-            user_id
-        });
-
-        res.json({ datos: resultadoIA });
-    } catch (error) {
-        res.status(500).json({ error: error.message });
+    // 1. Validación de entrada
+    if (!texto) {
+      return res.status(400).json({ error: "El campo 'texto' es obligatorio." });
     }
-};
 
-exports.obtenerHistorial = async (req, res) => {
-    try {
-        const { user_id } = req.query;
-        const { data, error } = await Analisis.obtenerTodos(user_id);
-        if (error) throw error;
-        res.json(data);
-    } catch (error) {
-        res.status(500).json({ error: error.message });
+    console.log("Iniciando análisis para el texto:", texto.substring(0, 50) + "...");
+
+    // 2. Llamada a Groq (IA)
+    const chatCompletion = await groq.chat.completions.create({
+      messages: [
+        {
+          role: "system",
+          content: "Eres un experto analista. Analiza el siguiente texto de forma breve y profesional."
+        },
+        {
+          role: "user",
+          content: texto
+        },
+      ],
+      model: "llama3-8b-8192",
+    });
+
+    // 3. Log de depuración (Vital para ver en Render)
+    console.log("Respuesta completa de Groq recibida.");
+
+    // 4. Validación de la respuesta de la IA (Evita el error del '0')
+    if (!chatCompletion.choices || chatCompletion.choices.length === 0) {
+      console.error("Groq devolvió un objeto sin opciones (choices)");
+      return res.status(500).json({ error: "La IA no devolvió una respuesta válida." });
     }
+
+    const resultadoIA = chatCompletion.choices[0]?.message?.content;
+
+    if (!resultadoIA) {
+      return res.status(500).json({ error: "El contenido de la respuesta de la IA está vacío." });
+    }
+
+    // 5. Guardar en Supabase (Opcional, según tu lógica)
+    const { data, error: dbError } = await supabase
+      .from("analisis") // Asegúrate que tu tabla se llame así
+      .insert([{ texto_original: texto, resultado: resultadoIA }])
+      .select();
+
+    if (dbError) {
+      console.error("Error al guardar en Supabase:", dbError);
+      // No cortamos el flujo aquí para que al menos devuelva el análisis de la IA
+    }
+
+    // 6. Respuesta final exitosa
+    return res.status(200).json({
+      mensaje: "Análisis realizado con éxito",
+      analisis: resultadoIA,
+      datos_guardados: data ? data[0] : "No se guardó en DB"
+    });
+
+  } catch (error) {
+    console.error("ERROR CRÍTICO EN EL CONTROLADOR:", error.message);
+    return res.status(500).json({
+      error: "Error interno del servidor",
+      detalles: error.message
+    });
+  }
 };
