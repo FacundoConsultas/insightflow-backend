@@ -24,7 +24,7 @@ export const crearAnalisis = async (req, res) => {
           content: texto
         },
       ],
-      model: "llama3-8b-8192",
+     model: "llama-3.1-8b-instant", // El reemplazo oficial
     });
 
     // 3. Log de depuración (Vital para ver en Render)
