@@ -1,5 +1,9 @@
-module.exports = {
-    apiKey: process.env.GROQ_API_KEY,
-    model: "llama-3.1-8b-instant",
-    apiUrl: "https://api.groq.com/openai/v1/chat/completions"
-};
+import Groq from "groq-sdk";
+import 'dotenv/config';
+
+// Inicializamos el cliente de Groq usando la variable de entorno que pusiste en Render
+const groq = new Groq({
+  apiKey: process.env.GROQ_API_KEY,
+});
+
+export default groq;
