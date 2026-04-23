@@ -1,8 +1,7 @@
 import { createClient } from '@supabase/supabase-js';
-import 'dotenv/config';
 
-// Inicializamos el cliente de Supabase
+// Usamos la Service Role Key para que el backend tenga permisos totales
 export const supabase = createClient(
-    process.env.SUPABASE_URL || 'https://ptgfyifwhksybvqxlvtj.supabase.co',
-    process.env.SUPABASE_ANON_KEY
+  process.env.SUPABASE_URL,
+  process.env.SUPABASE_SERVICE_ROLE_KEY // <--- Fijate que diga esto exactamente
 );
