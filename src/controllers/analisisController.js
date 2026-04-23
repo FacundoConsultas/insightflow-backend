@@ -1,11 +1,14 @@
 import groq from "../config/groq.js";
 import { supabase } from "../config/supabase.js";
 
-// @desc    Crear análisis con Inteligencia de Negocio y guardar en DB
+// @desc    Crear análisis con Inteligencia de Negocio y guardar en DB vinculando al usuario
 export const crearAnalisis = async (req, res) => {
   try {
-    const { texto } = req.body;
+    // Ahora pedimos el usuario_id que viene desde el Frontend
+    const { texto, usuario_id } = req.body; 
+    
     if (!texto) return res.status(400).json({ error: "El campo 'texto' es obligatorio." });
+    if (!usuario_id) return res.status(400).json({ error: "El 'usuario_id' es necesario para la seguridad RLS." });
 
     const chatCompletion = await groq.chat.completions.create({
       messages: [
@@ -30,6 +33,7 @@ export const crearAnalisis = async (req, res) => {
 
     const analisisIA = JSON.parse(chatCompletion.choices[0]?.message?.content);
 
+    // INSERTAMOS incluyendo el usuario_id
     const { data, error: dbError } = await supabase
       .from("analisis") 
       .insert([
@@ -39,7 +43,8 @@ export const crearAnalisis = async (req, res) => {
           categoria: analisisIA.categoria,
           sentimiento: analisisIA.sentimiento,
           prioridad: analisisIA.prioridad,
-          resumen: analisisIA.analisis_resumen
+          resumen: analisisIA.analisis_resumen,
+          usuario_id: usuario_id // <--- VÍNCULO DE SEGURIDAD
         }
       ])
       .select();
@@ -47,7 +52,7 @@ export const crearAnalisis = async (req, res) => {
     if (dbError) throw dbError;
 
     return res.status(200).json({
-      mensaje: "Análisis de InsightFlow AI completado",
+      mensaje: "Análisis completado y vinculado al usuario",
       clasificacion: analisisIA,
       registro_db: data[0]
     });
@@ -56,11 +61,13 @@ export const crearAnalisis = async (req, res) => {
   }
 };
 
-// @desc    Obtener historial con filtros de negocio
+// @desc    Obtener historial filtrado por el usuario logueado
 export const obtenerHistorial = async (req, res) => {
   try {
-    const { categoria, prioridad, sentimiento } = req.query;
-    let query = supabase.from("analisis").select("*");
+    const { categoria, prioridad, sentimiento, usuario_id } = req.query;
+    
+    // Filtramos siempre por usuario_id primero
+    let query = supabase.from("analisis").select("*").eq("usuario_id", usuario_id);
 
     if (categoria) query = query.eq("categoria", categoria);
     if (prioridad) query = query.eq("prioridad", prioridad);
@@ -75,10 +82,15 @@ export const obtenerHistorial = async (req, res) => {
   }
 };
 
-// @desc    Obtener estadísticas para Dashboard (Normalizadas)
+// @desc    Obtener estadísticas solo de los datos del usuario
 export const obtenerEstadisticas = async (req, res) => {
   try {
-    const { data, error } = await supabase.from("analisis").select("categoria, sentimiento, prioridad");
+    const { usuario_id } = req.query;
+    const { data, error } = await supabase
+        .from("analisis")
+        .select("categoria, sentimiento, prioridad")
+        .eq("usuario_id", usuario_id); // <--- SOLO MIS DATOS
+        
     if (error) throw error;
 
     const stats = {
@@ -89,14 +101,12 @@ export const obtenerEstadisticas = async (req, res) => {
     };
 
     data.forEach(item => {
-      // Función para quitar tildes y dejar todo en minúsculas
       const normalizar = (t) => t ? t.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase() : "";
 
       const c = normalizar(item.categoria);
       const s = normalizar(item.sentimiento);
       const p = normalizar(item.prioridad);
 
-      // Conteo con lógica flexible
       if (c.includes("pago")) stats.categorias.Pagos++;
       else if (c.includes("envi")) stats.categorias.Envios++;
       else if (c.includes("prod")) stats.categorias.Producto++;
@@ -113,17 +123,26 @@ export const obtenerEstadisticas = async (req, res) => {
       else if (p.includes("baj")) stats.prioridades.Baja++;
     });
 
-    return res.status(200).json({ mensaje: "KPIs normalizados", stats });
+    return res.status(200).json({ mensaje: "KPIs del usuario", stats });
   } catch (error) {
     return res.status(500).json({ error: "Error en estadísticas", detalles: error.message });
   }
 };
 
-// @desc    Eliminar un registro
+// @desc    Eliminar un registro (RLS se encargará de que sea el dueño)
 export const eliminarAnalisis = async (req, res) => {
   try {
     const { id } = req.params;
-    const { data, error } = await supabase.from("analisis").delete().eq("id", id).select();
+    // Agregamos chequeo de usuario_id por seguridad extra en la query
+    const { usuario_id } = req.body; 
+
+    const { data, error } = await supabase
+        .from("analisis")
+        .delete()
+        .eq("id", id)
+        .eq("usuario_id", usuario_id) // Doble validación
+        .select();
+
     if (error) throw error;
     return res.status(200).json({ mensaje: "Eliminado de InsightFlow", eliminado: data[0] });
   } catch (error) {
