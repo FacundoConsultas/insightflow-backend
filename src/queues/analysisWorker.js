@@ -3,6 +3,8 @@ import redisConnection from '../config/redisClient.js';
 import groq from "../config/groq.js";
 import { supabase } from "../config/supabase.js";
 
+const UMBRAL_CRISIS = 3; // Si hay 3 o más tickets similares, es una crisis
+
 const worker = new Worker('analisis-mensajes', async (job) => {
     const { texto, usuario_id } = job.data;
     
@@ -14,7 +16,7 @@ const worker = new Worker('analisis-mensajes', async (job) => {
             messages: [
                 {
                     role: "system",
-                    content: `Eres InsightFlow AI, experto en Customer Experience para E-commerce.
+                    content: `Eres InsightFlow AI, experto en CX para E-commerce.
                     Analiza el mensaje y responde ÚNICAMENTE en JSON:
                     {
                       "categoria": "Logística, Pagos, Calidad de Producto, Error de Sistema o Preventa",
@@ -37,7 +39,7 @@ const worker = new Worker('analisis-mensajes', async (job) => {
 
         const analisisIA = JSON.parse(chatCompletion.choices[0]?.message?.content);
 
-        // 2. Guardado en Supabase
+        // 2. Guardado del Análisis Individual
         const { error: dbError } = await supabase
             .from("analisis")
             .insert([
@@ -54,16 +56,45 @@ const worker = new Worker('analisis-mensajes', async (job) => {
 
         if (dbError) throw dbError;
 
+        // --- 🧠 3. LÓGICA DE DETECCIÓN DE PATRONES (EL CEREBRO) ---
+        
+        // Buscamos tickets similares en las últimas 2 horas para este usuario
+        const haceDosHoras = new Date(Date.now() - 2 * 60 * 60 * 1000).toISOString();
+
+        const { data: recientes, error: errorConteo } = await supabase
+            .from("analisis")
+            .select("id")
+            .eq("usuario_id", usuario_id)
+            .eq("categoria", analisisIA.categoria)
+            .in("sentimiento", ["Negativo", "Irritado"])
+            .gt("created_at", haceDosHoras);
+
+        if (!errorConteo && recientes.length >= UMBRAL_CRISIS) {
+            console.log(`⚠️ PATRÓN DETECTADO: ${recientes.length} quejas de ${analisisIA.categoria}`);
+            
+            // Insertamos la alerta de crisis
+            await supabase
+                .from("patrones_crisis")
+                .insert([{
+                    usuario_id,
+                    categoria: analisisIA.categoria,
+                    insight: `Se detectó un pico de ${recientes.length} quejas sobre ${analisisIA.categoria} en las últimas 2 horas.`,
+                    frecuencia: recientes.length,
+                    nivel_critico: recientes.length > 5 ? 'alto' : 'medio'
+                }]);
+        }
+        // -------------------------------------------------------
+
         console.log(`✅ Trabajo ${job.id} completado con éxito`);
         return { success: true };
 
     } catch (error) {
         console.error(`❌ Error procesando trabajo ${job.id}:`, error.message);
-        throw error; // Relevante para que BullMQ gestione el reintento
+        throw error; 
     }
 }, { 
     connection: redisConnection,
-    concurrency: 5 // Procesa hasta 5 tickets en paralelo
+    concurrency: 5 
 });
 
 export default worker;
