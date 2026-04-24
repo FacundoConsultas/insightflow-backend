@@ -4,7 +4,8 @@ import {
   crearAnalisisMasivo, 
   obtenerHistorial, 
   eliminarAnalisis, 
-  obtenerEstadisticas 
+  obtenerEstadisticas,
+  resolverCrisisMasiva // <-- Nueva función
 } from '../controllers/analisisController.js';
 import { supabase } from '../config/supabase.js'; 
 
@@ -12,15 +13,13 @@ const router = express.Router();
 
 /**
  * MIDDLEWARE: checkProTier
- * Este guardia verifica que el usuario sea Tier 1 (Pro) 
- * antes de dejarlo pasar a las rutas masivas.
+ * Verifica que el usuario sea Tier 1 (Pro)
  */
 const checkProTier = async (req, res, next) => {
-  // En GET usamos query, en POST usamos body
   const usuario_id = req.body.usuario_id || req.query.usuario_id;
 
   if (!usuario_id) {
-    return res.status(400).json({ error: "ID de usuario requerido para verificar plan." });
+    return res.status(400).json({ error: "ID de usuario requerido." });
   }
 
   try {
@@ -30,31 +29,19 @@ const checkProTier = async (req, res, next) => {
       .eq('id', usuario_id)
       .single();
 
-    if (error || !user) {
-      return res.status(404).json({ error: "Usuario no encontrado en la base de datos." });
+    if (error || !user || user.tier < 1) {
+      return res.status(403).json({ error: "Acceso denegado. Función exclusiva del Plan Pro." });
     }
-
-    if (user.tier < 1) {
-      return res.status(403).json({ 
-        error: "Acceso denegado. La carga masiva es una función exclusiva del Plan Pro." 
-      });
-    }
-
-    // Si llegó acá, es PRO. Lo dejamos pasar.
     next();
   } catch (e) {
-    console.error("Error en middleware:", e);
-    res.status(500).json({ error: "Error de servidor al verificar el nivel de suscripción." });
+    res.status(500).json({ error: "Error de servidor al verificar suscripción." });
   }
 };
 
 // --- RUTAS ---
-
-// Análisis individual (Disponible para todos, el límite se controla en el controller o front)
 router.post('/', crearAnalisis);
-
-// Análisis masivo (Protegido: Solo Tier 1+)
 router.post('/masivo', checkProTier, crearAnalisisMasivo);
+router.post('/resolver-crisis', resolverCrisisMasiva); // <-- Nueva ruta para la acción del banner
 
 router.get('/', obtenerHistorial);
 router.get('/stats', obtenerEstadisticas);

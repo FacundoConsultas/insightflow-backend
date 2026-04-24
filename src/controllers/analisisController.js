@@ -1,6 +1,8 @@
 import { analysisQueue } from '../queues/analysisQueue.js';
 import { supabase } from "../config/supabase.js";
+import Groq from "groq-sdk";
 
+const groq = new Groq({ apiKey: process.env.GROQ_API_KEY });
 const MAX_FREE_MESSAGES = 10;
 
 // Helper para verificar el Tier del usuario
@@ -14,6 +16,59 @@ const getUserTier = async (usuario_id) => {
     return data.tier;
 };
 
+// --- NUEVA FUNCIÓN: RESOLVER CRISIS MASIVAMENTE ---
+export const resolverCrisisMasiva = async (req, res) => {
+    const { crisis_id, usuario_id } = req.body;
+
+    try {
+        // 1. Obtener datos de la crisis
+        const { data: crisis } = await supabase
+            .from('patrones_crisis')
+            .select('*')
+            .eq('id', crisis_id)
+            .single();
+
+        if (!crisis) return res.status(404).json({ error: "Crisis no encontrada" });
+
+        // 2. IA genera respuesta de contingencia
+        const completion = await groq.chat.completions.create({
+            messages: [
+                {
+                    role: "system",
+                    content: `Eres el Director de Comunicación. Hay una crisis de ${crisis.categoria}. 
+                    Insight: ${crisis.insight}. Redacta una respuesta corta, profesional y empática para los clientes. 
+                    No uses nombres específicos.`
+                }
+            ],
+            model: "llama-3.1-8b-instant"
+        });
+
+        const respuestaMaestra = completion.choices[0]?.message?.content;
+
+        // 3. Actualizar todos los tickets de esa categoría (últimas 2 horas)
+        const haceDosHoras = new Date(Date.now() - 2 * 60 * 60 * 1000).toISOString();
+        
+        await supabase
+            .from('analisis')
+            .update({ resultado: respuestaMaestra })
+            .eq('usuario_id', usuario_id)
+            .eq('categoria', crisis.categoria)
+            .gt('created_at', haceDosHoras);
+
+        // 4. Marcar crisis como resuelta
+        await supabase
+            .from('patrones_crisis')
+            .update({ resuelta: true })
+            .eq('id', crisis_id);
+
+        res.json({ success: true, respuesta: respuestaMaestra });
+
+    } catch (error) {
+        res.status(500).json({ error: error.message });
+    }
+};
+
+// --- FUNCIONES EXISTENTES ---
 export const crearAnalisis = async (req, res) => {
     try {
         const { texto, usuario_id } = req.body;
@@ -21,33 +76,19 @@ export const crearAnalisis = async (req, res) => {
 
         const tier = await getUserTier(usuario_id);
 
-        // Si NO es Pro, verificamos el límite de 10
         if (tier < 1) {
-            const { count, error: countError } = await supabase
+            const { count } = await supabase
                 .from("analisis")
                 .select("*", { count: 'exact', head: true })
                 .eq("usuario_id", usuario_id);
 
-            if (countError) throw countError;
-
             if (count >= MAX_FREE_MESSAGES) {
-                return res.status(403).json({ 
-                    error: "Límite alcanzado", 
-                    detalle: "Has agotado tus 10 análisis gratuitos. Pasate al plan Pro para continuar." 
-                });
+                return res.status(403).json({ error: "Límite alcanzado" });
             }
         }
 
-        // Encolamos el trabajo
-        await analysisQueue.add('analizar-ticket', { texto, usuario_id }, {
-            attempts: 3,
-            backoff: { type: 'exponential', delay: 5000 }
-        });
-
-        return res.status(202).json({ 
-            mensaje: "Análisis iniciado", 
-            detalle: "El ticket ha sido encolado para procesamiento." 
-        });
+        await analysisQueue.add('analizar-ticket', { texto, usuario_id });
+        return res.status(202).json({ mensaje: "Análisis encolado" });
     } catch (error) {
         return res.status(500).json({ error: error.message });
     }
@@ -60,7 +101,6 @@ export const crearAnalisisMasivo = async (req, res) => {
 
         const tier = await getUserTier(usuario_id);
 
-        // Si NO es Pro, validamos si los mensajes del CSV exceden lo que le queda de créditos
         if (tier < 1) {
             const { count } = await supabase
                 .from("analisis")
@@ -68,22 +108,15 @@ export const crearAnalisisMasivo = async (req, res) => {
                 .eq("usuario_id", usuario_id);
 
             if (count + mensajes.length > MAX_FREE_MESSAGES) {
-                return res.status(403).json({ 
-                    error: "Límite insuficiente", 
-                    detalle: `Tu archivo tiene ${mensajes.length} mensajes, pero solo te quedan ${MAX_FREE_MESSAGES - count} créditos en el plan gratuito.` 
-                });
+                return res.status(403).json({ error: "Límite insuficiente" });
             }
         }
 
-        // Encolamos todos los mensajes
         for (const texto of mensajes) {
             await analysisQueue.add('analizar-ticket-masivo', { texto, usuario_id });
         }
 
-        return res.status(202).json({ 
-            mensaje: "Procesamiento masivo iniciado", 
-            total_encolados: mensajes.length 
-        });
+        return res.status(202).json({ mensaje: "Procesamiento masivo iniciado" });
     } catch (error) {
         return res.status(500).json({ error: error.message });
     }
@@ -92,8 +125,6 @@ export const crearAnalisisMasivo = async (req, res) => {
 export const obtenerHistorial = async (req, res) => {
     try {
         const { usuario_id } = req.query;
-        if (!usuario_id) return res.status(400).json({ error: "usuario_id requerido" });
-
         const { data, error } = await supabase
             .from("analisis")
             .select("*")
@@ -112,7 +143,7 @@ export const eliminarAnalisis = async (req, res) => {
         const { id } = req.params;
         const { error } = await supabase.from("analisis").delete().eq("id", id);
         if (error) throw error;
-        return res.status(200).json({ mensaje: "Eliminado correctamente" });
+        return res.status(200).json({ mensaje: "Eliminado" });
     } catch (error) { 
         return res.status(500).json({ error: error.message });
     }
@@ -121,8 +152,6 @@ export const eliminarAnalisis = async (req, res) => {
 export const obtenerEstadisticas = async (req, res) => {
     try {
         const { usuario_id } = req.query;
-        if (!usuario_id) return res.status(400).json({ error: "usuario_id requerido" });
-
         const { data, error } = await supabase
             .from("analisis")
             .select("sentimiento, prioridad")
