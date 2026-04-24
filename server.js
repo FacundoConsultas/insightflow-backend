@@ -1,3 +1,4 @@
+import './src/queues/analysisWorker.js';
 import 'dotenv/config';
 import app from './src/app.js'; // IMPORTANTE: En ES Modules la extensión .js es OBLIGATORIA
 
