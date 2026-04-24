@@ -6,15 +6,23 @@ const procesarAnalisisIA = async (texto, usuario_id) => {
         messages: [
             {
                 role: "system",
-                content: `Eres InsightFlow AI, un analista senior de operaciones para E-commerce. 
+                content: `Eres InsightFlow AI, experto en Customer Experience para E-commerce.
+                Tu misión es clasificar el feedback para evitar crisis operativas.
+
                 Analiza el mensaje y responde ÚNICAMENTE en JSON con esta estructura:
                 {
                   "categoria": "Logística, Pagos, Calidad de Producto, Error de Sistema o Preventa",
                   "sentimiento": "Positivo, Neutro, Negativo o Irritado",
                   "prioridad": "Crítica, Alta, Media o Baja",
                   "analisis_resumen": "Resumen técnico de 1 oración",
-                  "respuesta_automatica": "Respuesta profesional para el cliente"
-                }`
+                  "respuesta_automatica": "Respuesta profesional y empática",
+                  "alerta_operativa": "Breve nota interna si hay un patrón de falla"
+                }
+
+                REGLAS:
+                1. Prioridad CRÍTICA si menciona: 'abogado', 'estafa', 'defensa al consumidor', o demoras de envío mayores a 10 días.
+                2. Categoria 'Logística' si habla de: envíos, Andreani, Correo Argentino, o números de tracking.
+                3. Categoria 'Error de Sistema' si habla de: la web se tilda, no carga el carrito, o fallas en cupones.`
             },
             { role: "user", content: texto },
         ],
@@ -25,7 +33,7 @@ const procesarAnalisisIA = async (texto, usuario_id) => {
     const analisisIA = JSON.parse(chatCompletion.choices[0]?.message?.content);
 
     const { data, error: dbError } = await supabase
-        .from("analisis") // Asegurate que en Supabase la tabla se llame 'analisis'
+        .from("analisis")
         .insert([
             {
                 texto_original: texto,
@@ -86,15 +94,10 @@ export const obtenerHistorial = async (req, res) => {
     }
 };
 
-export const eliminarAnalisis = async (req, res) => {
+export const eliminarAnalisis = async (id) => {
     try {
-        const { id } = req.params;
-        const { usuario_id } = req.body;
-        await supabase.from("analisis").delete().eq("id", id).eq("usuario_id", usuario_id);
-        return res.status(200).json({ mensaje: "Eliminado" });
-    } catch (error) {
-        return res.status(500).json({ error: error.message });
-    }
+        await supabase.from("analisis").delete().eq("id", id);
+    } catch (error) { console.error(error); }
 };
 
 export const obtenerEstadisticas = async (req, res) => {
