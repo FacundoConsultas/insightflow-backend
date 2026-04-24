@@ -1,30 +1,44 @@
 import { analysisQueue } from '../queues/analysisQueue.js';
 import { supabase } from "../config/supabase.js";
 
-const MAX_FREE_MESSAGES = 10; // Límite del plan Starter de $0/mes
+const MAX_FREE_MESSAGES = 10;
+
+// Helper para verificar el Tier del usuario
+const getUserTier = async (usuario_id) => {
+    const { data, error } = await supabase
+        .from('usuarios')
+        .select('tier')
+        .eq('id', usuario_id)
+        .single();
+    if (error || !data) return 0;
+    return data.tier;
+};
 
 export const crearAnalisis = async (req, res) => {
     try {
         const { texto, usuario_id } = req.body;
         if (!texto || !usuario_id) return res.status(400).json({ error: "Faltan datos" });
 
-        // Verificar cuota actual en Supabase
-        const { count, error: countError } = await supabase
-            .from("analisis")
-            .select("*", { count: 'exact', head: true })
-            .eq("usuario_id", usuario_id);
+        const tier = await getUserTier(usuario_id);
 
-        if (countError) throw countError;
+        // Si NO es Pro, verificamos el límite de 10
+        if (tier < 1) {
+            const { count, error: countError } = await supabase
+                .from("analisis")
+                .select("*", { count: 'exact', head: true })
+                .eq("usuario_id", usuario_id);
 
-        // Bloqueo si alcanzó el límite
-        if (count >= MAX_FREE_MESSAGES) {
-            return res.status(403).json({ 
-                error: "Límite alcanzado", 
-                detalle: "Has agotado tus 10 análisis gratuitos. Pasate al plan Pro de $49 para continuar." 
-            });
+            if (countError) throw countError;
+
+            if (count >= MAX_FREE_MESSAGES) {
+                return res.status(403).json({ 
+                    error: "Límite alcanzado", 
+                    detalle: "Has agotado tus 10 análisis gratuitos. Pasate al plan Pro para continuar." 
+                });
+            }
         }
 
-        // Encolamos el trabajo si tiene créditos
+        // Encolamos el trabajo
         await analysisQueue.add('analizar-ticket', { texto, usuario_id }, {
             attempts: 3,
             backoff: { type: 'exponential', delay: 5000 }
@@ -44,19 +58,24 @@ export const crearAnalisisMasivo = async (req, res) => {
         const { mensajes, usuario_id } = req.body;
         if (!mensajes || !usuario_id) return res.status(400).json({ error: "Faltan datos" });
 
-        const { count } = await supabase
-            .from("analisis")
-            .select("*", { count: 'exact', head: true })
-            .eq("usuario_id", usuario_id);
+        const tier = await getUserTier(usuario_id);
 
-        // Validar si el archivo CSV no excede lo que le queda de créditos
-        if (count + mensajes.length > MAX_FREE_MESSAGES) {
-            return res.status(403).json({ 
-                error: "Límite insuficiente", 
-                detalle: `Tu archivo tiene ${mensajes.length} mensajes, pero solo te quedan ${MAX_FREE_MESSAGES - count} créditos.` 
-            });
+        // Si NO es Pro, validamos si los mensajes del CSV exceden lo que le queda de créditos
+        if (tier < 1) {
+            const { count } = await supabase
+                .from("analisis")
+                .select("*", { count: 'exact', head: true })
+                .eq("usuario_id", usuario_id);
+
+            if (count + mensajes.length > MAX_FREE_MESSAGES) {
+                return res.status(403).json({ 
+                    error: "Límite insuficiente", 
+                    detalle: `Tu archivo tiene ${mensajes.length} mensajes, pero solo te quedan ${MAX_FREE_MESSAGES - count} créditos en el plan gratuito.` 
+                });
+            }
         }
 
+        // Encolamos todos los mensajes
         for (const texto of mensajes) {
             await analysisQueue.add('analizar-ticket-masivo', { texto, usuario_id });
         }
@@ -73,6 +92,8 @@ export const crearAnalisisMasivo = async (req, res) => {
 export const obtenerHistorial = async (req, res) => {
     try {
         const { usuario_id } = req.query;
+        if (!usuario_id) return res.status(400).json({ error: "usuario_id requerido" });
+
         const { data, error } = await supabase
             .from("analisis")
             .select("*")
@@ -89,8 +110,9 @@ export const obtenerHistorial = async (req, res) => {
 export const eliminarAnalisis = async (req, res) => {
     try {
         const { id } = req.params;
-        await supabase.from("analisis").delete().eq("id", id);
-        return res.status(200).json({ mensaje: "Eliminado" });
+        const { error } = await supabase.from("analisis").delete().eq("id", id);
+        if (error) throw error;
+        return res.status(200).json({ mensaje: "Eliminado correctamente" });
     } catch (error) { 
         return res.status(500).json({ error: error.message });
     }
@@ -99,7 +121,14 @@ export const eliminarAnalisis = async (req, res) => {
 export const obtenerEstadisticas = async (req, res) => {
     try {
         const { usuario_id } = req.query;
-        const { data } = await supabase.from("analisis").select("sentimiento, prioridad").eq("usuario_id", usuario_id);
+        if (!usuario_id) return res.status(400).json({ error: "usuario_id requerido" });
+
+        const { data, error } = await supabase
+            .from("analisis")
+            .select("sentimiento, prioridad")
+            .eq("usuario_id", usuario_id);
+
+        if (error) throw error;
         return res.status(200).json({ stats: data });
     } catch (error) {
         return res.status(500).json({ error: error.message });
