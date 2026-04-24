@@ -1,10 +1,9 @@
 import groq from "../config/groq.js";
 import { supabase } from "../config/supabase.js";
 
-// @desc    Crear análisis con Inteligencia de Negocio y guardar en DB vinculando al usuario
+// @desc    Crear análisis experto en E-commerce y guardar en DB
 export const crearAnalisis = async (req, res) => {
   try {
-    // Ahora pedimos el usuario_id que viene desde el Frontend
     const { texto, usuario_id } = req.body; 
     
     if (!texto) return res.status(400).json({ error: "El campo 'texto' es obligatorio." });
@@ -14,16 +13,23 @@ export const crearAnalisis = async (req, res) => {
       messages: [
         {
           role: "system",
-          content: `Eres InsightFlow AI, un motor avanzado de inteligencia de negocio para atención al cliente.
-          Analiza el mensaje y responde ÚNICAMENTE en formato JSON con esta estructura:
+          content: `Eres InsightFlow AI, un analista senior de operaciones para E-commerce. 
+          Tu objetivo es procesar tickets de soporte y convertirlos en datos accionables.
+
+          Analiza el mensaje y responde ÚNICAMENTE en JSON con esta estructura:
           {
-            "categoria": "Pagos, Envíos, Producto, Soporte Técnico o General",
-            "sentimiento": "Positivo, Neutro o Negativo",
+            "categoria": "Logística, Pagos, Calidad de Producto, Error de Sistema o Preventa",
+            "sentimiento": "Positivo, Neutro, Negativo o Irritado",
             "prioridad": "Crítica, Alta, Media o Baja",
-            "analisis_resumen": "Resumen de 1 oración enfocada en el problema de negocio",
-            "respuesta_automatica": "Respuesta profesional, empática y resolutiva"
+            "analisis_resumen": "Resumen técnico de 1 oración indicando el problema central",
+            "respuesta_automatica": "Respuesta profesional, empática y resolutiva para el cliente",
+            "detecto_pedido": true
           }
-          REGLA DE ORO: Si el texto menciona 'denuncia', 'abogado', 'estafa', 'fraude' o 'nunca más', la prioridad DEBE ser Crítica.`
+
+          REGLAS DE NEGOCIO:
+          - Si menciona 'estafa', 'denuncia', 'abogado' o 'redes sociales', prioridad CRÍTICA.
+          - Si el sentimiento es 'Irritado', la respuesta_automatica debe ser conciliadora y escalar el caso.
+          - Si menciona un número (ej: #1234), detecto_pedido debe ser true.`
         },
         { role: "user", content: texto },
       ],
@@ -33,18 +39,18 @@ export const crearAnalisis = async (req, res) => {
 
     const analisisIA = JSON.parse(chatCompletion.choices[0]?.message?.content);
 
-    // INSERTAMOS incluyendo el usuario_id
+    // INSERTAMOS en Supabase mapeando los campos del JSON de la IA a las columnas de la DB
     const { data, error: dbError } = await supabase
       .from("analisis") 
       .insert([
         { 
           texto_original: texto, 
-          resultado: analisisIA.respuesta_automatica,
+          resultado: analisisIA.respuesta_automatica, // Guardamos la respuesta para el botón de copiar
           categoria: analisisIA.categoria,
           sentimiento: analisisIA.sentimiento,
           prioridad: analisisIA.prioridad,
           resumen: analisisIA.analisis_resumen,
-          usuario_id: usuario_id // <--- VÍNCULO DE SEGURIDAD
+          usuario_id: usuario_id 
         }
       ])
       .select();
@@ -52,12 +58,12 @@ export const crearAnalisis = async (req, res) => {
     if (dbError) throw dbError;
 
     return res.status(200).json({
-      mensaje: "Análisis completado y vinculado al usuario",
+      mensaje: "Análisis de E-commerce completado",
       clasificacion: analisisIA,
       registro_db: data[0]
     });
   } catch (error) {
-    return res.status(500).json({ error: "Error en InsightFlow AI", detalles: error.message });
+    return res.status(500).json({ error: "Error en motor de IA", detalles: error.message });
   }
 };
 
@@ -66,7 +72,6 @@ export const obtenerHistorial = async (req, res) => {
   try {
     const { categoria, prioridad, sentimiento, usuario_id } = req.query;
     
-    // Filtramos siempre por usuario_id primero
     let query = supabase.from("analisis").select("*").eq("usuario_id", usuario_id);
 
     if (categoria) query = query.eq("categoria", categoria);
@@ -82,21 +87,21 @@ export const obtenerHistorial = async (req, res) => {
   }
 };
 
-// @desc    Obtener estadísticas solo de los datos del usuario
+// @desc    Obtener estadísticas (KPIs)
 export const obtenerEstadisticas = async (req, res) => {
   try {
     const { usuario_id } = req.query;
     const { data, error } = await supabase
         .from("analisis")
         .select("categoria, sentimiento, prioridad")
-        .eq("usuario_id", usuario_id); // <--- SOLO MIS DATOS
+        .eq("usuario_id", usuario_id);
         
     if (error) throw error;
 
     const stats = {
       total: data.length,
-      categorias: { Pagos: 0, Envios: 0, Producto: 0, Soporte: 0, General: 0 },
-      sentimientos: { Positivo: 0, Neutro: 0, Negativo: 0 },
+      categorias: { Logistica: 0, Pagos: 0, Producto: 0, Sistema: 0, Preventa: 0 },
+      sentimientos: { Positivo: 0, Neutro: 0, Negativo: 0, Irritado: 0 },
       prioridades: { Critica: 0, Alta: 0, Media: 0, Baja: 0 }
     };
 
@@ -107,15 +112,17 @@ export const obtenerEstadisticas = async (req, res) => {
       const s = normalizar(item.sentimiento);
       const p = normalizar(item.prioridad);
 
-      if (c.includes("pago")) stats.categorias.Pagos++;
-      else if (c.includes("envi")) stats.categorias.Envios++;
+      // Lógica de conteo por categorías de E-commerce
+      if (c.includes("logist")) stats.categorias.Logistica++;
+      else if (c.includes("pago")) stats.categorias.Pagos++;
       else if (c.includes("prod")) stats.categorias.Producto++;
-      else if (c.includes("sopor") || c.includes("tecnic")) stats.categorias.Soporte++;
-      else stats.categorias.General++;
+      else if (c.includes("sistem") || c.includes("error")) stats.categorias.Sistema++;
+      else stats.categorias.Preventa++;
 
       if (s.includes("positi")) stats.sentimientos.Positivo++;
       else if (s.includes("neutr")) stats.sentimientos.Neutro++;
       else if (s.includes("negati")) stats.sentimientos.Negativo++;
+      else if (s.includes("irrit")) stats.sentimientos.Irritado++;
 
       if (p.includes("criti")) stats.prioridades.Critica++;
       else if (p.includes("alt")) stats.prioridades.Alta++;
@@ -123,28 +130,27 @@ export const obtenerEstadisticas = async (req, res) => {
       else if (p.includes("baj")) stats.prioridades.Baja++;
     });
 
-    return res.status(200).json({ mensaje: "KPIs del usuario", stats });
+    return res.status(200).json({ mensaje: "KPIs actualizados", stats });
   } catch (error) {
     return res.status(500).json({ error: "Error en estadísticas", detalles: error.message });
   }
 };
 
-// @desc    Eliminar un registro (RLS se encargará de que sea el dueño)
+// @desc    Eliminar un registro
 export const eliminarAnalisis = async (req, res) => {
   try {
     const { id } = req.params;
-    // Agregamos chequeo de usuario_id por seguridad extra en la query
     const { usuario_id } = req.body; 
 
     const { data, error } = await supabase
         .from("analisis")
         .delete()
         .eq("id", id)
-        .eq("usuario_id", usuario_id) // Doble validación
+        .eq("usuario_id", usuario_id) 
         .select();
 
     if (error) throw error;
-    return res.status(200).json({ mensaje: "Eliminado de InsightFlow", eliminado: data[0] });
+    return res.status(200).json({ mensaje: "Registro eliminado", eliminado: data[0] });
   } catch (error) {
     return res.status(500).json({ error: "Error al eliminar", detalles: error.message });
   }
