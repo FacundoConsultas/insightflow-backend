@@ -1,22 +1,22 @@
-import { supabase } from '../config/supabase.js'; // CAMBIO: import y agregado de .js
+import { supabase } from '../config/supabase.js';
 
 const Analisis = {
     crear: async (datos) => {
         return await supabase
-            .from('analisis_datos')
+            .from('analisis') // Cambiado de analisis_datos a analisis
             .insert([{
-                contenido: datos.contenido,
-                resultado_ia: datos.resultado_ia,
-                user_id: datos.user_id 
+                texto_original: datos.texto_original,
+                resultado: datos.resultado,
+                usuario_id: datos.usuario_id 
             }]);
     },
-    obtenerTodos: async (user_id) => {
+    obtenerTodos: async (usuario_id) => {
         return await supabase
-            .from('analisis_datos')
+            .from('analisis')
             .select('*')
-            .eq('user_id', user_id)
+            .eq('usuario_id', usuario_id)
             .order('created_at', { ascending: false });
     }
 };
 
-export default Analisis; // CAMBIO: export default en lugar de module.exports
+export default Analisis;
