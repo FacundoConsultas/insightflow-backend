@@ -2,9 +2,8 @@ import { Worker } from 'bullmq';
 import redisConnection from '../config/redisClient.js';
 import groq from "../config/groq.js";
 import { supabase } from "../config/supabase.js";
-import { enviarAlertaEmail } from "../services/emailService.js"; // Lo crearemos en el siguiente paso
+import { enviarAlertaEmail } from "../services/emailService.js";
 
-// Configuración de Pesos para el "Cerebro" de Severidad
 const PESOS_PRIORIDAD = {
   "Crítica": 4,
   "Alta": 2,
@@ -12,31 +11,27 @@ const PESOS_PRIORIDAD = {
   "Baja": 0.5
 };
 
-const SCORE_UMBRAL_CRISIS = 7; // Ej: 2 Críticas (8 pts) o 4 Altas (8 pts) disparan crisis
+const SCORE_UMBRAL_CRISIS = 7; 
 
 const worker = new Worker('analisis-mensajes', async (job) => {
-    const { texto, usuario_id } = job.data;
+    const { texto, usuario_id, cliente_id } = job.data; // cliente_id puede ser un email o ID de cliente
     
-    console.log(`🤖 Analizando riesgo para trabajo ${job.id}...`);
+    console.log(`🤖 Analizando impacto total para trabajo ${job.id}...`);
 
     try {
-        // 1. Llamada a la IA (Groq) - Mantenemos el prompt profesional
+        // 1. IA analiza el sentimiento y categoría
         const chatCompletion = await groq.chat.completions.create({
             messages: [
                 {
                     role: "system",
-                    content: `Eres InsightFlow AI, experto en CX. 
-                    Analiza y responde ÚNICAMENTE en JSON:
+                    content: `Eres InsightFlow AI. Analiza y responde ÚNICAMENTE en JSON:
                     {
                       "categoria": "Logística, Pagos, Calidad de Producto, Error de Sistema o Preventa",
                       "sentimiento": "Positivo, Neutro, Negativo o Irritado",
                       "prioridad": "Crítica, Alta, Media o Baja",
-                      "analisis_resumen": "Resumen técnico de 1 oración",
-                      "respuesta_automatica": "Respuesta profesional y empática"
-                    }
-                    REGLAS:
-                    1. Prioridad CRÍTICA si menciona: 'abogado', 'estafa', 'defensa al consumidor', o demoras > 10 días.
-                    2. Categoria 'Logística' si habla de: envíos, Andreani, Correo Argentino, tracking.`
+                      "analisis_resumen": "1 oración",
+                      "respuesta_automatica": "Respuesta profesional"
+                    }`
                 },
                 { role: "user", content: texto },
             ],
@@ -46,8 +41,8 @@ const worker = new Worker('analisis-mensajes', async (job) => {
 
         const analisisIA = JSON.parse(chatCompletion.choices[0]?.message?.content);
 
-        // 2. Guardado del Análisis Individual
-        const { error: dbError } = await supabase
+        // 2. Guardar el análisis
+        const { data: nuevoTicket, error: dbError } = await supabase
             .from("analisis")
             .insert([{
                 texto_original: texto,
@@ -56,17 +51,30 @@ const worker = new Worker('analisis-mensajes', async (job) => {
                 sentimiento: analisisIA.sentimiento,
                 prioridad: analisisIA.prioridad,
                 resumen: analisisIA.analisis_resumen,
-                usuario_id: usuario_id
-            }]);
+                usuario_id: usuario_id,
+                cliente_id: cliente_id || 'anónimo' // Agrupamos por cliente
+            }])
+            .select()
+            .single();
 
         if (dbError) throw dbError;
 
-        // --- 🧠 3. EL CEREBRO: LÓGICA DE SEVERIDAD PONDERADA ---
-        
-        const haceTresHoras = new Date(Date.now() - 3 * 60 * 60 * 1000).toISOString();
+        // --- 👤 LÓGICA DE CLIENTE EN RIESGO (CHURN) ---
+        // Si un mismo cliente tiene 3 o más quejas, es una alerta roja individual
+        const { count: quejasCliente } = await supabase
+            .from("analisis")
+            .select("*", { count: 'exact', head: true })
+            .eq("cliente_id", cliente_id || 'anónimo')
+            .in("sentimiento", ["Negativo", "Irritado"]);
 
-        // Traemos los tickets negativos recientes de esta categoría
-        const { data: recientes, error: errorConteo } = await supabase
+        if (quejasCliente >= 3) {
+            console.log(`🔥 CLIENTE EN RIESGO: ${cliente_id}`);
+            // Opcional: Podrías mandar un mail específico avisando que "X" cliente está por irse
+        }
+
+        // --- 🧠 LÓGICA DE CRISIS GENERAL (SEVERIDAD) ---
+        const haceTresHoras = new Date(Date.now() - 3 * 60 * 60 * 1000).toISOString();
+        const { data: recientes } = await supabase
             .from("analisis")
             .select("prioridad")
             .eq("usuario_id", usuario_id)
@@ -74,14 +82,10 @@ const worker = new Worker('analisis-mensajes', async (job) => {
             .in("sentimiento", ["Negativo", "Irritado"])
             .gt("created_at", haceTresHoras);
 
-        if (!errorConteo && recientes.length > 0) {
-            // Calculamos el score acumulado de severidad
+        if (recientes && recientes.length > 0) {
             const scoreTotal = recientes.reduce((acc, t) => acc + (PESOS_PRIORIDAD[t.prioridad] || 0), 0);
             
-            console.log(`📈 Score de severidad en ${analisisIA.categoria}: ${scoreTotal}`);
-
             if (scoreTotal >= SCORE_UMBRAL_CRISIS) {
-                // Verificar si ya existe una crisis activa para evitar spam de alertas
                 const { data: crisisExistente } = await supabase
                     .from("patrones_crisis")
                     .select("id")
@@ -91,38 +95,27 @@ const worker = new Worker('analisis-mensajes', async (job) => {
                     .single();
 
                 if (!crisisExistente) {
-                    const insight = `ALERTA CRÍTICA: La categoría ${analisisIA.categoria} alcanzó un score de severidad de ${scoreTotal}. Hay múltiples reclamos de alta prioridad.`;
+                    const insight = `CRISIS EN ${analisisIA.categoria.toUpperCase()}: Score ${scoreTotal}.`;
                     
-                    // a. Insertar crisis (esto activa el Realtime en el Front)
-                    const { data: nuevaCrisis } = await supabase
-                        .from("patrones_crisis")
-                        .insert([{
-                            usuario_id,
-                            categoria: analisisIA.categoria,
-                            insight,
-                            frecuencia: recientes.length,
-                            nivel_critico: scoreTotal > 12 ? 'alto' : 'medio'
-                        }])
-                        .select()
-                        .single();
+                    await supabase.from("patrones_crisis").insert([{
+                        usuario_id,
+                        categoria: analisisIA.categoria,
+                        insight,
+                        frecuencia: recientes.length,
+                        nivel_critico: scoreTotal > 12 ? 'alto' : 'medio'
+                    }]);
 
-                    // b. DISPARAR EMAIL (Fase 2)
-                    // Llamamos a la función aunque todavía no hayamos configurado Nodemailer del todo
+                    // ENVIAR EMAIL REAL
                     await enviarAlertaEmail(usuario_id, analisisIA.categoria, insight);
                 }
             }
         }
 
-        console.log(`✅ Trabajo ${job.id} completado.`);
         return { success: true };
-
     } catch (error) {
-        console.error(`❌ Error en worker ${job.id}:`, error.message);
-        throw error; 
+        console.error("❌ Error:", error.message);
+        throw error;
     }
-}, { 
-    connection: redisConnection,
-    concurrency: 5 
-});
+}, { connection: redisConnection, concurrency: 5 });
 
 export default worker;
