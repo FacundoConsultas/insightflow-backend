@@ -1,10 +1,16 @@
 import express from 'express';
 import cors from 'cors';
-import analisisRoutes from './routes/analisisRoutes.js'; // CAMBIO: import y agregado de .js
+import analisisRoutes from './routes/analisisRoutes.js';
 
 const app = express();
 
-app.use(cors());
+// Configuración de CORS más robusta
+app.use(cors({
+  origin: '*', // Permite peticiones de cualquier origen (Vercel, Localhost, etc.)
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization']
+}));
+
 app.use(express.json());
 
 // Ruta de prueba
