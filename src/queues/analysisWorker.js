@@ -11,9 +11,8 @@ const PESOS_PRIORIDAD = {
   "Baja": 0.5
 };
 
-// --- CONFIGURACIÓN DE INTELIGENCIA ---
-const FACTOR_DESVIACION = 1.8; // Alerta si sube un 180% sobre lo normal
-const MINIMO_SCORE_BASE = 5;   // Red de seguridad para cuentas nuevas
+const FACTOR_DESVIACION = 1.8;
+const MINIMO_SCORE_BASE = 5;
 
 const worker = new Worker('analisis-mensajes', async (job) => {
     const { texto, usuario_id } = job.data; 
@@ -54,38 +53,37 @@ const worker = new Worker('analisis-mensajes', async (job) => {
             usuario_id: usuario_id
         }]);
 
-        // --- 🧠 LÓGICA DE BASELINE DINÁMICO (Detección de Anomalías) ---
+        // --- 🧠 LÓGICA DE CONTEXTO HISTÓRICO Y TENDENCIAS ---
+        const ahora = new Date();
+        const hace48Horas = new Date(ahora - 48 * 60 * 60 * 1000).toISOString();
         
-        // A. Calcular la "Normalidad" (Promedio últimas 48hs)
-        const hace48Horas = new Date(Date.now() - 48 * 60 * 60 * 1000).toISOString();
         const { data: historico } = await supabase
             .from("analisis")
-            .select("prioridad")
+            .select("prioridad, created_at")
             .eq("usuario_id", usuario_id)
             .eq("categoria", analisisIA.categoria)
             .gt("created_at", hace48Horas);
 
+        // A. Baseline (Normalidad de las últimas 48hs)
         const puntosTotales48h = (historico || []).reduce((acc, t) => acc + (PESOS_PRIORIDAD[t.prioridad] || 0), 0);
-        const promedioPorHora = puntosTotales48h / 48;
-        const baseline = Math.max(promedioPorHora, MINIMO_SCORE_BASE);
+        const baseline = Math.max(puntosTotales48h / 48, MINIMO_SCORE_BASE);
 
-        // B. Calcular la "Urgencia Actual" (Score última 1 hora)
-        const haceUnaHora = new Date(Date.now() - 1 * 60 * 60 * 1000).toISOString();
-        const { data: recientes } = await supabase
-            .from("analisis")
-            .select("prioridad")
-            .eq("usuario_id", usuario_id)
-            .eq("categoria", analisisIA.categoria)
-            .in("sentimiento", ["Negativo", "Irritado"])
-            .gt("created_at", haceUnaHora);
+        // B. Score Actual (Última 1 hora)
+        const haceUnaHora = new Date(ahora - 1 * 60 * 60 * 1000).toISOString();
+        const recientes = (historico || []).filter(t => t.created_at > haceUnaHora);
+        const scoreActual = recientes.reduce((acc, t) => acc + (PESOS_PRIORIDAD[t.prioridad] || 0), 0);
 
-        const scoreActual = (recientes || []).reduce((acc, t) => acc + (PESOS_PRIORIDAD[t.prioridad] || 0), 0);
-        
-        console.log(`📊 [${analisisIA.categoria}] Baseline: ${baseline.toFixed(2)} | Actual: ${scoreActual}`);
+        // C. Comparativa Ayer (Misma ventana horaria hace 24hs)
+        const hace25Horas = new Date(ahora - 25 * 60 * 60 * 1000).toISOString();
+        const hace23Horas = new Date(ahora - 23 * 60 * 60 * 1000).toISOString();
+        const scoreAyer = (historico || [])
+            .filter(t => t.created_at > hace25Horas && t.created_at < hace23Horas)
+            .reduce((acc, t) => acc + (PESOS_PRIORIDAD[t.prioridad] || 0), 0);
 
-        // --- 🔎 GESTIÓN AUTOMÁTICA DE CRISIS ---
+        console.log(`📊 [${analisisIA.categoria}] Baseline: ${baseline.toFixed(2)} | Actual: ${scoreActual} | Ayer: ${scoreAyer}`);
 
-        // Verificar si ya existe una crisis activa para esta categoría
+        // --- 🔎 GESTIÓN DE CRISIS CON INSIGHTS ---
+
         const { data: crisisActiva } = await supabase
             .from("patrones_crisis")
             .select("id")
@@ -94,32 +92,39 @@ const worker = new Worker('analisis-mensajes', async (job) => {
             .eq("resuelta", false)
             .maybeSingle();
 
-        // CASO 1: DISPARAR CRISIS (Si el score actual supera el baseline * factor)
         if (scoreActual > (baseline * FACTOR_DESVIACION)) {
             if (!crisisActiva) {
-                const incremento = ((scoreActual / baseline) * 100).toFixed(0);
-                const insight = `ANOMALÍA DETECTADA: La categoría ${analisisIA.categoria} presenta un score de ${scoreActual} (${incremento}% sobre lo normal).`;
+                // Generar Insight de Tendencia
+                let tendenciaMsg = "Se detectó una anomalía en el volumen de quejas.";
+                
+                if (scoreAyer > 0) {
+                    const diff = ((scoreActual / scoreAyer) * 100).toFixed(0);
+                    if (scoreActual > scoreAyer) {
+                        tendenciaMsg = `La situación está EMPEORANDO: el impacto es un ${diff}% mayor que ayer a esta hora.`;
+                    } else {
+                        tendenciaMsg = `Problema RECURRENTE: se detectó un patrón crítico similar al de ayer.`;
+                    }
+                }
+
+                const incrementoBaseline = ((scoreActual / baseline) * 100).toFixed(0);
+                const insightFinal = `🚨 ${tendenciaMsg} (Score: ${scoreActual}, +${incrementoBaseline}% vs. normal).`;
                 
                 await supabase.from("patrones_crisis").insert([{
                     usuario_id,
                     categoria: analisisIA.categoria,
-                    insight,
-                    frecuencia: (recientes || []).length,
+                    insight: insightFinal,
+                    frecuencia: recientes.length,
                     nivel_critico: scoreActual > (baseline * 3) ? 'alto' : 'medio'
                 }]);
 
-                await enviarAlertaEmail(usuario_id, analisisIA.categoria, insight);
+                await enviarAlertaEmail(usuario_id, analisisIA.categoria, insightFinal);
             }
         } 
-        // CASO 2: AUTOCIERRE (Si hay crisis activa pero el score ya volvió a la normalidad)
         else if (crisisActiva && scoreActual <= baseline) {
-            console.log(`✅ Normalización detectada en ${analisisIA.categoria}. Cerrando crisis automáticamente...`);
+            console.log(`✅ Situación normalizada en ${analisisIA.categoria}.`);
             await supabase
                 .from("patrones_crisis")
-                .update({ 
-                    resuelta: true, 
-                    resuelta_at: new Date().toISOString() 
-                })
+                .update({ resuelta: true, resuelta_at: ahora.toISOString() })
                 .eq("id", crisisActiva.id);
         }
 
@@ -127,7 +132,7 @@ const worker = new Worker('analisis-mensajes', async (job) => {
         return { success: true };
 
     } catch (error) {
-        console.error("❌ ERROR:", error.message);
+        console.error("❌ ERROR EN TRABAJO:", error.message);
         throw error;
     }
 }, { connection: redisConnection, concurrency: 5 });
