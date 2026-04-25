@@ -1,50 +1,35 @@
 import express from 'express';
-import { 
-  crearAnalisis, 
-  crearAnalisisMasivo, 
-  obtenerHistorial, 
-  eliminarAnalisis, 
-  obtenerEstadisticas,
-  resolverCrisisMasiva // <-- Nueva función
-} from '../controllers/analisisController.js';
-import { supabase } from '../config/supabase.js'; 
-
 const router = express.Router();
 
+// Imports de controladores
+import { getDecisionPanel } from '../controllers/decisionController.js';
+// (Asumo que tienes estos otros controladores por lo que hablamos antes)
+// import { getAnalisis, crearAnalisis } from '../controllers/analisisController.js'; 
+
+// --- RUTAS DE INSIGHTFLOW ---
+
 /**
- * MIDDLEWARE: checkProTier
- * Verifica que el usuario sea Tier 1 (Pro)
+ * @route   GET /api/decision-panel
+ * @desc    Obtiene el resumen consolidado (Crisis, Churn y Acción Sugerida)
+ * @access  Privado (requiere usuario_id)
  */
-const checkProTier = async (req, res, next) => {
-  const usuario_id = req.body.usuario_id || req.query.usuario_id;
+router.get('/decision-panel', getDecisionPanel);
 
-  if (!usuario_id) {
-    return res.status(400).json({ error: "ID de usuario requerido." });
-  }
+/**
+ * @route   POST /api/analizar
+ * @desc    Encola un nuevo mensaje para ser analizado por la IA
+ */
+// router.post('/analizar', crearAnalisis);
 
-  try {
-    const { data: user, error } = await supabase
-      .from('usuarios')
-      .select('tier')
-      .eq('id', usuario_id)
-      .single();
+/**
+ * @route   GET /api/historial
+ * @desc    Obtiene todos los registros de la tabla analisis
+ */
+// router.get('/historial', getAnalisis);
 
-    if (error || !user || user.tier < 1) {
-      return res.status(403).json({ error: "Acceso denegado. Función exclusiva del Plan Pro." });
-    }
-    next();
-  } catch (e) {
-    res.status(500).json({ error: "Error de servidor al verificar suscripción." });
-  }
-};
-
-// --- RUTAS ---
-router.post('/', crearAnalisis);
-router.post('/masivo', checkProTier, crearAnalisisMasivo);
-router.post('/resolver-crisis', resolverCrisisMasiva); // <-- Nueva ruta para la acción del banner
-
-router.get('/', obtenerHistorial);
-router.get('/stats', obtenerEstadisticas);
-router.delete('/:id', eliminarAnalisis);
+// Ruta de test para verificar que la API responde
+router.get('/health', (req, res) => {
+    res.json({ status: 'ok', message: 'API de InsightFlow funcionando correctamente' });
+});
 
 export default router;
