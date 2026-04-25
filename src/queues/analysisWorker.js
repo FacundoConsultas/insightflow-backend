@@ -4,29 +4,22 @@ import groq from "../config/groq.js";
 import { supabase } from "../config/supabase.js";
 import { enviarAlertaEmail } from "../services/emailService.js";
 
-const PESOS_PRIORIDAD = {
-  "Crítica": 4,
-  "Alta": 2,
-  "Media": 1,
-  "Baja": 0.5
-};
-
+const PESOS_PRIORIDAD = { "Crítica": 4, "Alta": 2, "Media": 1, "Baja": 0.5 };
 const FACTOR_DESVIACION = 1.8;
 const MINIMO_SCORE_BASE = 5;
 
 const worker = new Worker('analisis-mensajes', async (job) => {
-    // Extraemos cliente_id del trabajo (capa de cliente)
     const { texto, usuario_id, cliente_id } = job.data; 
     
-    console.log(`🤖 Analizando impacto para usuario ${usuario_id} | Cliente: ${cliente_id || 'Anónimo'}...`);
+    console.log(`🤖 Procesando Incidente | Usuario: ${usuario_id} | Cliente: ${cliente_id || 'Anónimo'}`);
 
     try {
-        // 1. Análisis de IA con foco en CHURN
+        // 1. Análisis de IA (Categoría, Sentimiento y Riesgo de Churn)
         const chatCompletion = await groq.chat.completions.create({
             messages: [
                 {
                     role: "system",
-                    content: `Eres InsightFlow AI, experto en retención de clientes. 
+                    content: `Eres InsightFlow AI, experto en retención de clientes y gestión de crisis. 
                     Analiza y responde ÚNICAMENTE en JSON:
                     {
                       "categoria": "Logística, Pagos, Calidad de Producto, Error de Sistema o Preventa",
@@ -45,7 +38,7 @@ const worker = new Worker('analisis-mensajes', async (job) => {
 
         const analisisIA = JSON.parse(chatCompletion.choices[0]?.message?.content);
 
-        // 2. Guardar el análisis incluyendo cliente_id
+        // 2. Guardar análisis individual
         await supabase.from("analisis").insert([{
             texto_original: texto,
             resultado: analisisIA.respuesta_automatica,
@@ -57,88 +50,64 @@ const worker = new Worker('analisis-mensajes', async (job) => {
             cliente_id: cliente_id || "Anónimo"
         }]);
 
-        // --- 🧠 LÓGICA DE CONTEXTO E INTELIGENCIA ---
+        // --- 🧠 LÓGICA DE INTELIGENCIA DE NEGOCIO ---
         const ahora = new Date();
         const hace48Horas = new Date(ahora - 48 * 60 * 60 * 1000).toISOString();
-        
         const { data: historico } = await supabase
             .from("analisis")
-            .select("prioridad, created_at, sentimiento, cliente_id")
+            .select("prioridad, created_at")
             .eq("usuario_id", usuario_id)
             .eq("categoria", analisisIA.categoria)
             .gt("created_at", hace48Horas);
 
-        // A. Baseline (Normalidad)
-        const puntosTotales48h = (historico || []).reduce((acc, t) => acc + (PESOS_PRIORIDAD[t.prioridad] || 0), 0);
-        const baseline = Math.max(puntosTotales48h / 48, MINIMO_SCORE_BASE);
+        const baseline = Math.max((historico || []).reduce((acc, t) => acc + (PESOS_PRIORIDAD[t.prioridad] || 0), 0) / 48, MINIMO_SCORE_BASE);
+        const scoreActual = (historico || []).filter(t => t.created_at > new Date(ahora - 3600000).toISOString()).reduce((acc, t) => acc + (PESOS_PRIORIDAD[t.prioridad] || 0), 0);
 
-        // B. Score Actual (Última hora)
-        const haceUnaHora = new Date(ahora - 1 * 60 * 60 * 1000).toISOString();
-        const recientes = (historico || []).filter(t => t.created_at > haceUnaHora);
-        const scoreActual = recientes.reduce((acc, t) => acc + (PESOS_PRIORIDAD[t.prioridad] || 0), 0);
-
-        // C. Comparativa Ayer (Contexto profundo)
-        const hace25Horas = new Date(ahora - 25 * 60 * 60 * 1000).toISOString();
-        const hace23Horas = new Date(ahora - 23 * 60 * 60 * 1000).toISOString();
-        const scoreAyer = (historico || [])
-            .filter(t => t.created_at > hace25Horas && t.created_at < hace23Horas)
-            .reduce((acc, t) => acc + (PESOS_PRIORIDAD[t.prioridad] || 0), 0);
-
-        // --- 🔎 GESTIÓN DE CRISIS Y CHURN ---
-
-        const { data: crisisActiva } = await supabase
+        // --- 🔎 TRACKING DE INCIDENTES (CAPA DE CLIENTE) ---
+        
+        // Buscamos si ya hay un incidente abierto o en progreso
+        const { data: incidenteActivo } = await supabase
             .from("patrones_crisis")
-            .select("id")
+            .select("id, estado")
             .eq("usuario_id", usuario_id)
             .eq("categoria", analisisIA.categoria)
-            .eq("resuelta", false)
+            .neq("estado", "resuelto")
             .maybeSingle();
 
-        // Se dispara si hay anomalía de volumen O riesgo de pérdida de cliente
         if (scoreActual > (baseline * FACTOR_DESVIACION) || analisisIA.riesgo_churn) {
-            if (!crisisActiva) {
-                let tendenciaMsg = "Se detectó una anomalía.";
-                
-                // Lógica de tendencia
-                if (scoreAyer > 0) {
-                    const diff = ((scoreActual / scoreAyer) * 100).toFixed(0);
-                    tendenciaMsg = scoreActual > scoreAyer 
-                        ? `EMPEORANDO: ${diff}% más que ayer.` 
-                        : `RECURRENTE: Patrón similar a ayer.`;
-                }
-
-                // Lógica de Churn
-                const churnAlert = analisisIA.riesgo_churn && cliente_id 
-                    ? `⚠️ RIESGO DE CHURN: Cliente [${cliente_id}] en peligro. ` 
-                    : "";
-
-                const incremento = ((scoreActual / baseline) * 100).toFixed(0);
-                const insightFinal = `${churnAlert}🚨 ${tendenciaMsg} Score: ${scoreActual} (+${incremento}% vs normal).`;
+            if (!incidenteActivo) {
+                // Lógica de Mensaje de Alerta
+                const churnTag = analisisIA.riesgo_churn ? `⚠️ CHURN DETECTADO [Cliente: ${cliente_id || 'ID Desconocido'}]` : `🚨 ANOMALÍA`;
+                const insight = `${churnTag}: Crisis en ${analisisIA.categoria}. Score: ${scoreActual.toFixed(1)}. Resumen: ${analisisIA.analisis_resumen}`;
                 
                 await supabase.from("patrones_crisis").insert([{
                     usuario_id,
                     categoria: analisisIA.categoria,
-                    insight: insightFinal,
-                    frecuencia: recientes.length,
+                    insight,
+                    estado: 'abierto',
+                    frecuencia: (historico || []).length,
                     nivel_critico: (analisisIA.riesgo_churn || scoreActual > baseline * 3) ? 'alto' : 'medio'
                 }]);
 
-                await enviarAlertaEmail(usuario_id, analisisIA.categoria, insightFinal);
+                await enviarAlertaEmail(usuario_id, analisisIA.categoria, insight);
+            } else {
+                // Actualizamos frecuencia del incidente existente
+                await supabase.from("patrones_crisis").update({ frecuencia: (historico || []).length }).eq("id", incidenteActivo.id);
             }
         } 
-        else if (crisisActiva && scoreActual <= baseline) {
-            console.log(`✅ Normalización en ${analisisIA.categoria}. Cerrando crisis.`);
-            await supabase
-                .from("patrones_crisis")
-                .update({ resuelta: true, resuelta_at: ahora.toISOString() })
-                .eq("id", crisisActiva.id);
+        else if (incidenteActivo && scoreActual <= baseline && incidenteActivo.estado === 'abierto') {
+            // Autocierre solo si el usuario no lo ha marcado como 'en_progreso' manualmente
+            await supabase.from("patrones_crisis").update({ 
+                estado: 'resuelto', 
+                resuelta: true, 
+                resuelta_at: ahora.toISOString() 
+            }).eq("id", incidenteActivo.id);
+            console.log(`✅ Incidente en ${analisisIA.categoria} normalizado y cerrado.`);
         }
 
-        console.log(`✅ Trabajo ${job.id} finalizado.`);
         return { success: true };
-
     } catch (error) {
-        console.error("❌ ERROR EN EL WORKER:", error.message);
+        console.error("❌ ERROR CRÍTICO EN WORKER:", error.message);
         throw error;
     }
 }, { connection: redisConnection, concurrency: 5 });
