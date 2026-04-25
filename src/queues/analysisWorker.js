@@ -25,7 +25,7 @@ const worker = new Worker('analisis-mensajes', async (job) => {
                       "categoria": "Logística, Pagos, Calidad de Producto, Error de Sistema o Preventa",
                       "sentimiento": "Positivo, Neutro, Negativo o Irritado",
                       "prioridad": "Crítica, Alta, Media o Baja",
-                      "riesgo_churn": true/false,
+                      "riesgo_churn": true,
                       "analisis_resumen": "1 oración",
                       "accion_recomendada": "Acción inmediata para retener al cliente (máx 15 palabras)",
                       "respuesta_automatica": "Respuesta profesional"
@@ -39,7 +39,7 @@ const worker = new Worker('analisis-mensajes', async (job) => {
 
         const analisisIA = JSON.parse(chatCompletion.choices[0]?.message?.content);
 
-        // 2. Guardar análisis en Supabase
+        // 2. Guardar análisis en Supabase (LÍNEA CORREGIDA AQUÍ)
         await supabase.from("analisis").insert([{
             texto_original: texto,
             resultado: analisisIA.respuesta_automatica,
@@ -47,6 +47,7 @@ const worker = new Worker('analisis-mensajes', async (job) => {
             sentimiento: analisisIA.sentimiento,
             prioridad: analisisIA.prioridad,
             resumen: analisisIA.analisis_resumen,
+            riesgo_churn: analisisIA.riesgo_churn, // <--- ESTO ES LO QUE FALTABA
             usuario_id: usuario_id,
             cliente_id: cliente_id || "Anónimo"
         }]);
@@ -75,9 +76,8 @@ const worker = new Worker('analisis-mensajes', async (job) => {
 
         if (scoreActual > (baseline * FACTOR_DESVIACION) || analisisIA.riesgo_churn) {
             if (!incidenteActivo) {
-                // Generar insight con la acción recomendada de la IA
                 const churnTag = analisisIA.riesgo_churn ? `⚠️ CHURN: [${cliente_id || 'ID Desconocido'}]` : `🚨 ALERTA`;
-                const insight = `${churnTag} en ${analisisIA.categoria}. ACCIÓN: ${analisisIA.accion_recomendada}`;
+                const insight = `${churnTag} en ${analisisIA.categoria}. ACCIÓN: ${analisisIA.accion_recommended}`;
                 
                 await supabase.from("patrones_crisis").insert([{
                     usuario_id,
@@ -90,12 +90,10 @@ const worker = new Worker('analisis-mensajes', async (job) => {
 
                 await enviarAlertaEmail(usuario_id, analisisIA.categoria, insight);
             } else {
-                // Solo actualizamos la frecuencia si ya hay algo abierto
                 await supabase.from("patrones_crisis").update({ frecuencia: (historico || []).length }).eq("id", incidenteActivo.id);
             }
         } 
         else if (incidenteActivo && scoreActual <= baseline && incidenteActivo.estado === 'abierto') {
-            // Autocierre inteligente
             await supabase.from("patrones_crisis").update({ 
                 estado: 'resuelto', 
                 resuelta: true, 
@@ -105,7 +103,7 @@ const worker = new Worker('analisis-mensajes', async (job) => {
 
         return { success: true };
     } catch (error) {
-        console.error("❌ ERROR CRÍTICO:", error.message);
+        console.error("❌ ERROR CRÍTICO EN WORKER:", error.message);
         throw error;
     }
 }, { connection: redisConnection, concurrency: 5 });
