@@ -58,13 +58,39 @@ export const resolverCrisisMasiva = async (req, res) => {
         // 4. Marcar crisis como resuelta
         await supabase
             .from('patrones_crisis')
-            .update({ resuelta: true })
+            .update({ estado: 'resuelto' })
             .eq('id', crisis_id);
 
         res.json({ success: true, respuesta: respuestaMaestra });
 
     } catch (error) {
         res.status(500).json({ error: error.message });
+    }
+};
+
+// --- IGNORAR CRISIS (botón "Ignorar Alerta" del frontend) ---
+export const ignorarCrisis = async (req, res) => {
+    const { usuario_id, crisis_id } = req.body;
+    if (!usuario_id) return res.status(400).json({ error: "Falta usuario_id" });
+
+    try {
+        if (crisis_id) {
+            // Resolver crisis específica por id
+            await supabase
+                .from('patrones_crisis')
+                .update({ estado: 'resuelto' })
+                .eq('id', crisis_id);
+        } else {
+            // Fallback: resolver todas las crisis activas del usuario
+            await supabase
+                .from('patrones_crisis')
+                .update({ estado: 'resuelto' })
+                .eq('usuario_id', usuario_id)
+                .neq('estado', 'resuelto');
+        }
+        return res.status(200).json({ success: true });
+    } catch (error) {
+        return res.status(500).json({ error: error.message });
     }
 };
 

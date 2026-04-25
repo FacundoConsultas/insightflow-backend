@@ -9,7 +9,7 @@ export const getDecisionPanel = async (req, res) => {
             .from("patrones_crisis")
             .select("*")
             .eq("usuario_id", usuario_id)
-            .eq("estado", "abierto")
+            .neq("estado", "resuelto")
             .order("nivel_critico", { ascending: false })
             .limit(1)
             .maybeSingle();
