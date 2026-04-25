@@ -58,39 +58,13 @@ export const resolverCrisisMasiva = async (req, res) => {
         // 4. Marcar crisis como resuelta
         await supabase
             .from('patrones_crisis')
-            .update({ estado: 'resuelto' })
+            .update({ resuelta: true })
             .eq('id', crisis_id);
 
         res.json({ success: true, respuesta: respuestaMaestra });
 
     } catch (error) {
         res.status(500).json({ error: error.message });
-    }
-};
-
-// --- IGNORAR CRISIS (botón "Ignorar Alerta" del frontend) ---
-export const ignorarCrisis = async (req, res) => {
-    const { usuario_id, crisis_id } = req.body;
-    if (!usuario_id) return res.status(400).json({ error: "Falta usuario_id" });
-
-    try {
-        if (crisis_id) {
-            // Resolver crisis específica por id
-            await supabase
-                .from('patrones_crisis')
-                .update({ estado: 'resuelto' })
-                .eq('id', crisis_id);
-        } else {
-            // Fallback: resolver todas las crisis activas del usuario
-            await supabase
-                .from('patrones_crisis')
-                .update({ estado: 'resuelto' })
-                .eq('usuario_id', usuario_id)
-                .neq('estado', 'resuelto');
-        }
-        return res.status(200).json({ success: true });
-    } catch (error) {
-        return res.status(500).json({ error: error.message });
     }
 };
 
@@ -103,13 +77,18 @@ export const crearAnalisis = async (req, res) => {
         const tier = await getUserTier(usuario_id);
 
         if (tier < 1) {
+            // Contar solo los análisis de HOY (no el total histórico)
+            const hoyInicio = new Date();
+            hoyInicio.setHours(0, 0, 0, 0);
+
             const { count } = await supabase
                 .from("analisis")
                 .select("*", { count: 'exact', head: true })
-                .eq("usuario_id", usuario_id);
+                .eq("usuario_id", usuario_id)
+                .gte("created_at", hoyInicio.toISOString());
 
-            if (count >= MAX_FREE_MESSAGES) {
-                return res.status(403).json({ error: "Límite alcanzado" });
+            if (count >= 3) {
+                return res.status(403).json({ error: "Límite diario alcanzado" });
             }
         }
 
@@ -128,13 +107,17 @@ export const crearAnalisisMasivo = async (req, res) => {
         const tier = await getUserTier(usuario_id);
 
         if (tier < 1) {
+            const hoyInicio = new Date();
+            hoyInicio.setHours(0, 0, 0, 0);
+
             const { count } = await supabase
                 .from("analisis")
                 .select("*", { count: 'exact', head: true })
-                .eq("usuario_id", usuario_id);
+                .eq("usuario_id", usuario_id)
+                .gte("created_at", hoyInicio.toISOString());
 
-            if (count + mensajes.length > MAX_FREE_MESSAGES) {
-                return res.status(403).json({ error: "Límite insuficiente" });
+            if (count + mensajes.length > 3) {
+                return res.status(403).json({ error: "Límite diario insuficiente" });
             }
         }
 

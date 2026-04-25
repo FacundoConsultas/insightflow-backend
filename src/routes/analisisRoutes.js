@@ -22,11 +22,11 @@ router.post('/', crearAnalisis);
 // DELETE /api/analisis/:id -> Para borrar registros de la tabla
 router.delete('/:id', eliminarAnalisis);
 
-// PATCH /api/analisis/crisis/ignorar -> Marcar crisis como resuelta desde el frontend
-router.patch('/crisis/ignorar', ignorarCrisis);
-
 // GET /api/analisis/decision-panel -> Para el banner de crisis y churn
 router.get('/decision-panel', getDecisionPanel);
+
+// POST /api/analisis/crisis/ignorar -> Marcar crisis como resuelta desde el frontend
+router.post('/crisis/ignorar', ignorarCrisis);
 
 // Ruta de test para verificar que el backend vive
 router.get('/health', (req, res) => {
