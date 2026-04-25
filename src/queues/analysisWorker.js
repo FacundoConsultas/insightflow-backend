@@ -11,10 +11,9 @@ const PESOS_PRIORIDAD = {
   "Baja": 0.5
 };
 
-// Factor de desviación: 1.8 significa que la crisis se dispara si el score actual 
-// es un 180% superior a lo normal de ese usuario.
-const FACTOR_DESVIACION = 1.8;
-const MINIMO_SCORE_BASE = 5; // Evita falsos positivos en cuentas nuevas o muy tranquilas.
+// --- CONFIGURACIÓN DE INTELIGENCIA ---
+const FACTOR_DESVIACION = 1.8; // Alerta si sube un 180% sobre lo normal
+const MINIMO_SCORE_BASE = 5;   // Red de seguridad para cuentas nuevas
 
 const worker = new Worker('analisis-mensajes', async (job) => {
     const { texto, usuario_id } = job.data; 
@@ -22,6 +21,7 @@ const worker = new Worker('analisis-mensajes', async (job) => {
     console.log(`🤖 Analizando impacto para trabajo ${job.id}...`);
 
     try {
+        // 1. Análisis de IA
         const chatCompletion = await groq.chat.completions.create({
             messages: [
                 {
@@ -43,20 +43,16 @@ const worker = new Worker('analisis-mensajes', async (job) => {
 
         const analisisIA = JSON.parse(chatCompletion.choices[0]?.message?.content);
 
-        // 1. Guardar el análisis individual
-        const { error: dbError } = await supabase
-            .from("analisis")
-            .insert([{
-                texto_original: texto,
-                resultado: analisisIA.respuesta_automatica,
-                categoria: analisisIA.categoria,
-                sentimiento: analisisIA.sentimiento,
-                prioridad: analisisIA.prioridad,
-                resumen: analisisIA.analisis_resumen,
-                usuario_id: usuario_id
-            }]);
-
-        if (dbError) throw dbError;
+        // 2. Guardar el análisis individual
+        await supabase.from("analisis").insert([{
+            texto_original: texto,
+            resultado: analisisIA.respuesta_automatica,
+            categoria: analisisIA.categoria,
+            sentimiento: analisisIA.sentimiento,
+            prioridad: analisisIA.prioridad,
+            resumen: analisisIA.analisis_resumen,
+            usuario_id: usuario_id
+        }]);
 
         // --- 🧠 LÓGICA DE BASELINE DINÁMICO (Detección de Anomalías) ---
         
@@ -69,10 +65,8 @@ const worker = new Worker('analisis-mensajes', async (job) => {
             .eq("categoria", analisisIA.categoria)
             .gt("created_at", hace48Horas);
 
-        const puntosTotales48h = historico.reduce((acc, t) => acc + (PESOS_PRIORIDAD[t.prioridad] || 0), 0);
+        const puntosTotales48h = (historico || []).reduce((acc, t) => acc + (PESOS_PRIORIDAD[t.prioridad] || 0), 0);
         const promedioPorHora = puntosTotales48h / 48;
-        
-        // Si la cuenta es muy nueva, usamos el MINIMO_SCORE_BASE como red de seguridad
         const baseline = Math.max(promedioPorHora, MINIMO_SCORE_BASE);
 
         // B. Calcular la "Urgencia Actual" (Score última 1 hora)
@@ -85,42 +79,55 @@ const worker = new Worker('analisis-mensajes', async (job) => {
             .in("sentimiento", ["Negativo", "Irritado"])
             .gt("created_at", haceUnaHora);
 
-        const scoreActual = recientes.reduce((acc, t) => acc + (PESOS_PRIORIDAD[t.prioridad] || 0), 0);
+        const scoreActual = (recientes || []).reduce((acc, t) => acc + (PESOS_PRIORIDAD[t.prioridad] || 0), 0);
         
-        console.log(`📊 Baseline (${analisisIA.categoria}): ${baseline.toFixed(2)} | Actual: ${scoreActual}`);
+        console.log(`📊 [${analisisIA.categoria}] Baseline: ${baseline.toFixed(2)} | Actual: ${scoreActual}`);
 
-        // C. Comparación Inteligente
+        // --- 🔎 GESTIÓN AUTOMÁTICA DE CRISIS ---
+
+        // Verificar si ya existe una crisis activa para esta categoría
+        const { data: crisisActiva } = await supabase
+            .from("patrones_crisis")
+            .select("id")
+            .eq("usuario_id", usuario_id)
+            .eq("categoria", analisisIA.categoria)
+            .eq("resuelta", false)
+            .maybeSingle();
+
+        // CASO 1: DISPARAR CRISIS (Si el score actual supera el baseline * factor)
         if (scoreActual > (baseline * FACTOR_DESVIACION)) {
-            
-            const { data: crisisExistente } = await supabase
-                .from("patrones_crisis")
-                .select("id")
-                .eq("usuario_id", usuario_id)
-                .eq("categoria", analisisIA.categoria)
-                .eq("resuelta", false)
-                .single();
-
-            if (!crisisExistente) {
+            if (!crisisActiva) {
                 const incremento = ((scoreActual / baseline) * 100).toFixed(0);
-                const insight = `ANOMALÍA DETECTADA: La categoría ${analisisIA.categoria} presenta un score de ${scoreActual}, un ${incremento}% superior al volumen normal.`;
+                const insight = `ANOMALÍA DETECTADA: La categoría ${analisisIA.categoria} presenta un score de ${scoreActual} (${incremento}% sobre lo normal).`;
                 
                 await supabase.from("patrones_crisis").insert([{
                     usuario_id,
                     categoria: analisisIA.categoria,
                     insight,
-                    frecuencia: recientes.length,
+                    frecuencia: (recientes || []).length,
                     nivel_critico: scoreActual > (baseline * 3) ? 'alto' : 'medio'
                 }]);
 
                 await enviarAlertaEmail(usuario_id, analisisIA.categoria, insight);
             }
+        } 
+        // CASO 2: AUTOCIERRE (Si hay crisis activa pero el score ya volvió a la normalidad)
+        else if (crisisActiva && scoreActual <= baseline) {
+            console.log(`✅ Normalización detectada en ${analisisIA.categoria}. Cerrando crisis automáticamente...`);
+            await supabase
+                .from("patrones_crisis")
+                .update({ 
+                    resuelta: true, 
+                    resuelta_at: new Date().toISOString() 
+                })
+                .eq("id", crisisActiva.id);
         }
 
-        console.log(`✅ Trabajo ${job.id} terminado.`);
+        console.log(`✅ Trabajo ${job.id} procesado.`);
         return { success: true };
 
     } catch (error) {
-        console.error("❌ ERROR EN EL TRABAJO:", error.message);
+        console.error("❌ ERROR:", error.message);
         throw error;
     }
 }, { connection: redisConnection, concurrency: 5 });
