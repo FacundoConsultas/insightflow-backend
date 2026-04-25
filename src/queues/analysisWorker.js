@@ -11,7 +11,10 @@ const PESOS_PRIORIDAD = {
   "Baja": 0.5
 };
 
-const SCORE_UMBRAL_CRISIS = 7; 
+// Factor de desviación: 1.8 significa que la crisis se dispara si el score actual 
+// es un 180% superior a lo normal de ese usuario.
+const FACTOR_DESVIACION = 1.8;
+const MINIMO_SCORE_BASE = 5; // Evita falsos positivos en cuentas nuevas o muy tranquilas.
 
 const worker = new Worker('analisis-mensajes', async (job) => {
     const { texto, usuario_id } = job.data; 
@@ -40,7 +43,7 @@ const worker = new Worker('analisis-mensajes', async (job) => {
 
         const analisisIA = JSON.parse(chatCompletion.choices[0]?.message?.content);
 
-        // 2. Guardar el análisis (Quitamos cliente_id para que no de error)
+        // 1. Guardar el análisis individual
         const { error: dbError } = await supabase
             .from("analisis")
             .insert([{
@@ -55,49 +58,67 @@ const worker = new Worker('analisis-mensajes', async (job) => {
 
         if (dbError) throw dbError;
 
-        // --- 🧠 LÓGICA DE CRISIS GENERAL (SEVERIDAD) ---
-        const haceTresHoras = new Date(Date.now() - 3 * 60 * 60 * 1000).toISOString();
+        // --- 🧠 LÓGICA DE BASELINE DINÁMICO (Detección de Anomalías) ---
+        
+        // A. Calcular la "Normalidad" (Promedio últimas 48hs)
+        const hace48Horas = new Date(Date.now() - 48 * 60 * 60 * 1000).toISOString();
+        const { data: historico } = await supabase
+            .from("analisis")
+            .select("prioridad")
+            .eq("usuario_id", usuario_id)
+            .eq("categoria", analisisIA.categoria)
+            .gt("created_at", hace48Horas);
+
+        const puntosTotales48h = historico.reduce((acc, t) => acc + (PESOS_PRIORIDAD[t.prioridad] || 0), 0);
+        const promedioPorHora = puntosTotales48h / 48;
+        
+        // Si la cuenta es muy nueva, usamos el MINIMO_SCORE_BASE como red de seguridad
+        const baseline = Math.max(promedioPorHora, MINIMO_SCORE_BASE);
+
+        // B. Calcular la "Urgencia Actual" (Score última 1 hora)
+        const haceUnaHora = new Date(Date.now() - 1 * 60 * 60 * 1000).toISOString();
         const { data: recientes } = await supabase
             .from("analisis")
             .select("prioridad")
             .eq("usuario_id", usuario_id)
             .eq("categoria", analisisIA.categoria)
             .in("sentimiento", ["Negativo", "Irritado"])
-            .gt("created_at", haceTresHoras);
+            .gt("created_at", haceUnaHora);
 
-        if (recientes && recientes.length > 0) {
-            const scoreTotal = recientes.reduce((acc, t) => acc + (PESOS_PRIORIDAD[t.prioridad] || 0), 0);
+        const scoreActual = recientes.reduce((acc, t) => acc + (PESOS_PRIORIDAD[t.prioridad] || 0), 0);
+        
+        console.log(`📊 Baseline (${analisisIA.categoria}): ${baseline.toFixed(2)} | Actual: ${scoreActual}`);
+
+        // C. Comparación Inteligente
+        if (scoreActual > (baseline * FACTOR_DESVIACION)) {
             
-            console.log(`📈 Score acumulado: ${scoreTotal}`);
+            const { data: crisisExistente } = await supabase
+                .from("patrones_crisis")
+                .select("id")
+                .eq("usuario_id", usuario_id)
+                .eq("categoria", analisisIA.categoria)
+                .eq("resuelta", false)
+                .single();
 
-            if (scoreTotal >= SCORE_UMBRAL_CRISIS) {
-                const { data: crisisExistente } = await supabase
-                    .from("patrones_crisis")
-                    .select("id")
-                    .eq("usuario_id", usuario_id)
-                    .eq("categoria", analisisIA.categoria)
-                    .eq("resuelta", false)
-                    .single();
+            if (!crisisExistente) {
+                const incremento = ((scoreActual / baseline) * 100).toFixed(0);
+                const insight = `ANOMALÍA DETECTADA: La categoría ${analisisIA.categoria} presenta un score de ${scoreActual}, un ${incremento}% superior al volumen normal.`;
+                
+                await supabase.from("patrones_crisis").insert([{
+                    usuario_id,
+                    categoria: analisisIA.categoria,
+                    insight,
+                    frecuencia: recientes.length,
+                    nivel_critico: scoreActual > (baseline * 3) ? 'alto' : 'medio'
+                }]);
 
-                if (!crisisExistente) {
-                    const insight = `CRISIS EN ${analisisIA.categoria.toUpperCase()}: El score llegó a ${scoreTotal}.`;
-                    
-                    await supabase.from("patrones_crisis").insert([{
-                        usuario_id,
-                        categoria: analisisIA.categoria,
-                        insight,
-                        frecuencia: recientes.length,
-                        nivel_critico: scoreTotal > 12 ? 'alto' : 'medio'
-                    }]);
-
-                    // ENVIAR EMAIL REAL
-                    await enviarAlertaEmail(usuario_id, analisisIA.categoria, insight);
-                }
+                await enviarAlertaEmail(usuario_id, analisisIA.categoria, insight);
             }
         }
 
         console.log(`✅ Trabajo ${job.id} terminado.`);
         return { success: true };
+
     } catch (error) {
         console.error("❌ ERROR EN EL TRABAJO:", error.message);
         throw error;
