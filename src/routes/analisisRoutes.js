@@ -1,35 +1,35 @@
 import express from 'express';
 const router = express.Router();
 
-// Imports de controladores
+// Importamos los controladores desde sus respectivos archivos
+import { 
+    crearAnalisis, 
+    obtenerHistorial, 
+    eliminarAnalisis 
+} from '../controllers/analisisController.js';
+
 import { getDecisionPanel } from '../controllers/decisionController.js';
-// (Asumo que tienes estos otros controladores por lo que hablamos antes)
-// import { getAnalisis, crearAnalisis } from '../controllers/analisisController.js'; 
 
 // --- RUTAS DE INSIGHTFLOW ---
 
-/**
- * @route   GET /api/decision-panel
- * @desc    Obtiene el resumen consolidado (Crisis, Churn y Acción Sugerida)
- * @access  Privado (requiere usuario_id)
- */
+// GET /api/analisis -> Para cargar la tabla principal
+router.get('/', obtenerHistorial);
+
+// POST /api/analisis -> Para el botón de "Analizar"
+router.post('/', crearAnalisis);
+
+// DELETE /api/analisis/:id -> Para borrar registros de la tabla
+router.delete('/:id', eliminarAnalisis);
+
+// GET /api/analisis/decision-panel -> Para el banner de crisis y churn
 router.get('/decision-panel', getDecisionPanel);
 
-/**
- * @route   POST /api/analizar
- * @desc    Encola un nuevo mensaje para ser analizado por la IA
- */
-// router.post('/analizar', crearAnalisis);
-
-/**
- * @route   GET /api/historial
- * @desc    Obtiene todos los registros de la tabla analisis
- */
-// router.get('/historial', getAnalisis);
-
-// Ruta de test para verificar que la API responde
+// Ruta de test para verificar que el backend vive
 router.get('/health', (req, res) => {
-    res.json({ status: 'ok', message: 'API de InsightFlow funcionando correctamente' });
+    res.json({ 
+        status: 'ok', 
+        message: 'API de InsightFlow conectada y rutas configuradas' 
+    });
 });
 
 export default router;
