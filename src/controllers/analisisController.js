@@ -77,19 +77,29 @@ export const crearAnalisis = async (req, res) => {
         const tier = await getUserTier(usuario_id);
 
         if (tier < 1) {
-            // Contar solo los análisis de HOY (no el total histórico)
-            const hoyInicio = new Date();
-            hoyInicio.setHours(0, 0, 0, 0);
+            // Leer creditos_hoy y creditos_fecha del usuario
+            const { data: u } = await supabase
+                .from('usuarios')
+                .select('creditos_hoy, creditos_fecha')
+                .eq('id', usuario_id)
+                .single();
 
-            const { count } = await supabase
-                .from("analisis")
-                .select("*", { count: 'exact', head: true })
-                .eq("usuario_id", usuario_id)
-                .gte("created_at", hoyInicio.toISOString());
+            const hoy = new Date().toISOString().slice(0, 10); // 'YYYY-MM-DD'
+            const mismaFecha = u?.creditos_fecha === hoy;
+            const creditosHoy = mismaFecha ? (u?.creditos_hoy || 0) : 0;
 
-            if (count >= 3) {
+            if (creditosHoy >= 3) {
                 return res.status(403).json({ error: "Límite diario alcanzado" });
             }
+
+            // Incrementar contador (o resetear si es nuevo día)
+            await supabase
+                .from('usuarios')
+                .update({
+                    creditos_hoy: creditosHoy + 1,
+                    creditos_fecha: hoy
+                })
+                .eq('id', usuario_id);
         }
 
         await analysisQueue.add('analizar-ticket', { texto, usuario_id });
@@ -134,14 +144,29 @@ export const crearAnalisisMasivo = async (req, res) => {
 export const obtenerHistorial = async (req, res) => {
     try {
         const { usuario_id } = req.query;
-        const { data, error } = await supabase
-            .from("analisis")
-            .select("*")
-            .eq("usuario_id", usuario_id)
-            .order("created_at", { ascending: false });
+        const [analisisRes, usuarioRes] = await Promise.all([
+            supabase
+                .from("analisis")
+                .select("*")
+                .eq("usuario_id", usuario_id)
+                .order("created_at", { ascending: false }),
+            supabase
+                .from("usuarios")
+                .select("creditos_hoy, creditos_fecha")
+                .eq("id", usuario_id)
+                .single()
+        ]);
 
-        if (error) throw error;
-        return res.status(200).json({ registros: data });
+        if (analisisRes.error) throw analisisRes.error;
+
+        const hoy = new Date().toISOString().slice(0, 10);
+        const u = usuarioRes.data;
+        const creditosHoy = (u?.creditos_fecha === hoy) ? (u?.creditos_hoy || 0) : 0;
+
+        return res.status(200).json({
+            registros: analisisRes.data,
+            creditos_hoy: creditosHoy
+        });
     } catch (error) {
         return res.status(500).json({ error: error.message });
     }
